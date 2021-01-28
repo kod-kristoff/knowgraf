@@ -10,5 +10,7 @@ name = "knowgraf"
 path = "src/bin.rs"
 
 [dependencies]
-oxigraph = { version = "0.1", features = ["sled"] }
+oxigraph = { version = "0.2", features = ["sled"] }
+actix-web = "3"
+actix-files = "*"
 
