@@ -1,6 +1,6 @@
 use oxigraph::SledStore;
 use actix_files::NamedFile;
-use actix_web::{get, post, web, HttpRequest, Responder, Result};
+use actix_web::{get, post, web, HttpRequest, HttpResponse, Responder, Result};
 use std::path::PathBuf;
 
 #[actix_web::main]
@@ -28,5 +28,9 @@ async fn get_index() -> Result<NamedFile> {
 
 #[post("/store")]
 async fn post_store(req: HttpRequest) -> impl Responder {
-    format!("target: {}", req.query_string())
+    if let Some(content_type) = req.headers().get("content-type") {
+        HttpResponse::Ok().body(format!("target: {}\ncontent-type: {:?}", req.query_string(), content_type))
+    } else {
+        HttpResponse::BadRequest().body("No Content-Type given.")
+    }
 }
