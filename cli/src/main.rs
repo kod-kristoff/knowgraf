@@ -8,12 +8,13 @@ fn main() {
 }
 
 fn cli() -> Result<(), Error> {
-    use clap::{crate_version, Arg, App};
+    use clap::{crate_version, crate_authors};
+    use clap::{Arg, App};
     use oxigraph::SledStore;
 
-    let matches = App::new("knowgraf cli")
+    let matches = App::new("knowgraf-cli")
         .version(crate_version!())
-        .author("Kristoffer Andersson <kod.kristoff@gmail.com>")
+        .author(crate_authors!(","))
         .about("Command-line interface to knowgraf.")
         .arg(Arg::with_name("file")
                 .short("f")
@@ -22,7 +23,7 @@ fn cli() -> Result<(), Error> {
                 .help("Specify the db")
                 .required(true))
         .arg(Arg::with_name("query")
-                .short("q"),
+                .short("q")
                 .long("query")
                 .value_name("INPUT"))
         .arg(Arg::with_name("update")
