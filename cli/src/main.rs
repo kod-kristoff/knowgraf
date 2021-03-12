@@ -21,6 +21,18 @@ fn cli() -> Result<(), Error> {
                 .value_name("PATH")
                 .help("Specify the db")
                 .required(true))
+        .arg(Arg::with_name("query")
+                .short("q"),
+                .long("query")
+                .value_name("INPUT"))
+        .arg(Arg::with_name("update")
+                .short("u")
+                .long("update")
+                .value_name("INPUT"))
+        .arg(Arg::with_name("store")
+                .short("s")
+                .long("store")
+                .value_name("INPUT"))
         .get_matches();
 
     let db_path = matches.value_of("file").unwrap();
