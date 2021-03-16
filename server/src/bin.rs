@@ -1,6 +1,14 @@
 use oxigraph::SledStore;
 use actix_files::NamedFile;
-use actix_web::{get, post, web, HttpRequest, Responder, Result};
+use actix_web::{
+    get,
+    post,
+    web,
+    HttpRequest,
+    HttpResponse,
+    Responder,
+    Result
+};
 use serde_derive::Deserialize;
 use std::path::PathBuf;
 
@@ -13,7 +21,10 @@ async fn main() -> std::io::Result<()> {
 
     HttpServer::new(|| {
         App::new()
-            .service(get_index)
+            .service(
+                web::resource("/")
+                    .route(web::get().to(get_index))
+            )
             .service(get_query)
             .service(post_store)
     })
@@ -23,7 +34,7 @@ async fn main() -> std::io::Result<()> {
 
 }
 
-#[get("/")]
+// #[get("/")]
 async fn get_index() -> Result<NamedFile> {
     let path = PathBuf::from("templates/index.html");
     Ok(NamedFile::open(path)?)
@@ -49,4 +60,42 @@ struct QueryData {
     query: String,
     default_graph_uri: Vec<String>,
     named_graph_uri: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actix_web::{http, test, App};
+
+    #[actix_rt::test]
+    async fn get_ui() {
+        let mut app = test::init_service(
+            App::new()
+                .service(
+                    web::resource("/")
+                        .route(web::get().to(get_index))
+                )
+        ).await;
+        let req = test::TestRequest::with_header("content-type", "text/plain").to_request();
+        let resp = test::call_service(&mut app, req).await;
+        assert!(resp.status().is_success());
+    } 
+
+    #[actix_rt::test]
+    async fn post_dataset_file() {
+        let mut app = test::init_service(
+            App::new()
+                .service(
+                    web::resource("/")
+                        .route(web::get().to(get_index))
+                )
+        ).await;
+        let req = test::TestRequest::post()
+            .uri("/store")
+            .header("Content-Type", "application/trig")
+            .set_payload("<http://example.com> <http://example.com> <http://example.com> .")
+            .to_request();
+        let resp = test::call_service(&mut app, req).await;
+        assert_eq!(resp.status(), http::StatusCode::NO_CONTENT);
+    }
 }

@@ -17,4 +17,8 @@ serde_derive = "1.0.124"
 env_logger = "0.8.3"
 log = "0.4.14"
 serde = "1.0.124"
+paperclip = { version = "0.5.0", features = ["actix"] }
+
+[dev-dependencies]
+actix-rt = "2.1.0"
 
