@@ -102,7 +102,7 @@ struct QueryData {
 #[derive(Debug, Display, Error)]
 enum AppError {
     #[display(fmt = "io error")]
-    IoError(io::Error), 
+    IoError(io::Error),
 }
 
 impl error::ResponseError for AppError {
@@ -131,7 +131,7 @@ mod tests {
     use super::*;
     use actix_web::{http, test, App};
     use tempfile::{tempdir};
-    
+
     #[actix_rt::test]
     async fn get_ui() {
         let mut app = test::init_service(
@@ -210,6 +210,28 @@ mod tests {
                 .to_request();
             let resp = test::call_service(&mut app, req).await;
             assert_eq!(resp.status(), http::StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        }
+
+        #[actix_rt::test]
+        async fn post_wrong_file() {
+            let path = tempdir().unwrap();
+            let app_state = web::Data::new(
+                AppState {
+                    store: SledStore::open(path.path()).unwrap()
+                }
+            );
+            let mut app = test::init_service(
+                App::new()
+                    .configure(
+                        config_app(app_state.clone()))
+            ).await;
+            let req = test::TestRequest::post()
+                .header("Content-Type", "application/trig")
+                .uri("/store")
+                .set_payload("<http://example.com>")
+                .to_request();
+            let resp = test::call_service(&mut app, req).await;
+            assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
         }
     }
 }
