@@ -22,10 +22,11 @@ pub fn build_cli() -> App<'static, 'static> {
                 .short("u")
                 .long("update")
                 .value_name("INPUT"))
-        .arg(Arg::with_name("store")
-                .short("s")
-                .long("store")
-                .value_name("INPUT"))
+        .subcommand(SubCommand::with_name("load")
+            .arg(Arg::with_name("data")
+                .short("d")
+                .long("data")
+                .value_name("INPUT")))
 }
 
 #[cfg(test)]

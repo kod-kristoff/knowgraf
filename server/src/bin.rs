@@ -8,17 +8,20 @@ use actix_web::{
     HttpRequest,
     HttpResponse,
     Responder,
-    Result
+    http,
+    error,
 };
 use serde_derive::Deserialize;
+use derive_more::{Display, Error};
 use std::path::PathBuf;
+use std::io;
 
 struct AppState {
     store: SledStore,
 }
 
 #[actix_web::main]
-async fn main() -> std::io::Result<()> {
+async fn main() -> io::Result<()> {
     use actix_web::{App, HttpServer};
     env_logger::init();
     println!("Starting server on 127.0.0.1:8080 ...");
@@ -28,7 +31,17 @@ async fn main() -> std::io::Result<()> {
 
     HttpServer::new(move || {
         App::new()
-            .app_data(app_state.clone())
+            .configure(config_app(app_state.clone()))
+    })
+    .bind(("127.0.0.1", 8080))?
+    .run()
+    .await
+
+}
+
+fn config_app(app_state: web::Data<AppState>) -> Box<dyn Fn(&mut web::ServiceConfig)> {
+    Box::new(move |cfg: &mut web::ServiceConfig| {
+        cfg.app_data(app_state.clone())
             .service(
                 web::resource("/")
                     .route(web::get().to(get_index))
@@ -37,16 +50,12 @@ async fn main() -> std::io::Result<()> {
             .service(
                 web::resource("/store")
                     .route(web::post().to(post_store))
-            )
+            );
     })
-    .bind(("127.0.0.1", 8080))?
-    .run()
-    .await
-
 }
 
 // #[get("/")]
-async fn get_index() -> Result<NamedFile> {
+async fn get_index() -> Result<NamedFile, AppError> {
     let path = PathBuf::from("templates/index.html");
     Ok(NamedFile::open(path)?)
 }
@@ -58,14 +67,28 @@ async fn get_query(form: web::Query<QueryData>) -> impl Responder {
 }
 
 // #[post("/store")]
-async fn post_store(req: HttpRequest, data: web::Data<AppState>) -> impl Responder {
+async fn post_store(req: HttpRequest, data: web::Data<AppState>, body: String) -> Result<HttpResponse, AppError> {
     if let Some(content_type) = req.headers().get("content-type") {
+        let content_type = content_type.to_str().unwrap();
         println!("content-type: {:?}", content_type);
-        println!("graphformat: {:?}", GraphFormat::from_media_type(content_type.to_str().unwrap()));
-        println!("datasetformat: {:?}", DatasetFormat::from_media_type(content_type.to_str().unwrap()));
-        HttpResponse::Ok().body(format!("target: {}\ncontent-type: {:?}", req.query_string(), content_type))
+        println!("graphformat: {:?}", GraphFormat::from_media_type(content_type));
+        println!("datasetformat: {:?}", DatasetFormat::from_media_type(content_type));
+        if let Some(format) = DatasetFormat::from_media_type(content_type) {
+            data.store
+                .load_dataset(
+                    io::BufReader::new(io::Cursor::new(body)),
+                    format,
+                    None
+                )?;
+            return Ok(HttpResponse::NoContent().finish());
+        } else {
+            println!("no supported media type");
+            Ok(HttpResponse::UnsupportedMediaType().body(format!("No supported Content-Type given: {}", content_type)))
+        }
+        // Ok(HttpResponse::Ok().body(format!("target: {}\ncontent-type: {:?}", req.query_string(), content_type)))
     } else {
-        HttpResponse::BadRequest().body("No Content-Type given.")
+        println!("no content type");
+        Ok(HttpResponse::BadRequest().body("No Content-Type given."))
     }
 }
 
@@ -76,11 +99,39 @@ struct QueryData {
     named_graph_uri: String,
 }
 
+#[derive(Debug, Display, Error)]
+enum AppError {
+    #[display(fmt = "io error")]
+    IoError(io::Error), 
+}
+
+impl error::ResponseError for AppError {
+    fn error_response(&self) -> HttpResponse {
+        use actix_web::dev::HttpResponseBuilder;
+        HttpResponseBuilder::new(self.status_code())
+            .set_header(http::header::CONTENT_TYPE, "text/html; charset=utf-8")
+            .body(self.to_string())
+    }
+
+    fn status_code(&self) -> http::StatusCode {
+        match *self {
+            _ => http::StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+}
+
+impl From<io::Error> for AppError {
+    fn from(err: io::Error) -> AppError {
+        AppError::IoError(err)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use actix_web::{http, test, App};
-
+    use tempfile::{tempdir};
+    
     #[actix_rt::test]
     async fn get_ui() {
         let mut app = test::init_service(
@@ -100,16 +151,16 @@ mod tests {
 
         #[actix_rt::test]
         async fn post_dataset_file() {
+            let path = tempdir().unwrap();
+            let app_state = web::Data::new(
+                AppState {
+                    store: SledStore::open(path.path()).unwrap()
+                }
+            );
             let mut app = test::init_service(
                 App::new()
-                    .service(
-                        web::resource("/")
-                            .route(web::get().to(get_index))
-                    )
-                    .service(
-                        web::resource("/store")
-                            .route(web::post().to(post_store))
-                    )
+                    .configure(
+                        config_app(app_state.clone()))
             ).await;
             let req = test::TestRequest::post()
                 .uri("/store")
@@ -122,20 +173,19 @@ mod tests {
 
         #[actix_rt::test]
         async fn post_no_content() {
+            let path = tempdir().unwrap();
+            let app_state = web::Data::new(
+                AppState {
+                    store: SledStore::open(path.path()).unwrap()
+                }
+            );
             let mut app = test::init_service(
                 App::new()
-                    .service(
-                        web::resource("/")
-                            .route(web::get().to(get_index))
-                    )
-                    .service(
-                        web::resource("/store")
-                            .route(web::post().to(post_store))
-                    )
+                    .configure(
+                        config_app(app_state.clone()))
             ).await;
             let req = test::TestRequest::post()
                 .uri("/store")
-                .set_payload("<http://example.com> <http://example.com> <http://example.com> .")
                 .to_request();
             let resp = test::call_service(&mut app, req).await;
             assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
@@ -143,18 +193,21 @@ mod tests {
 
         #[actix_rt::test]
         async fn post_unsupported_file() {
+            let path = tempdir().unwrap();
+            let app_state = web::Data::new(
+                AppState {
+                    store: SledStore::open(path.path()).unwrap()
+                }
+            );
             let mut app = test::init_service(
                 App::new()
-                    .service(
-                        web::resource("/")
-                            .route(web::get().to(get_index))
-                    )
-                    .service(
-                        web::resource("/store")
-                            .route(web::post().to(post_store))
-                    )
+                    .configure(
+                        config_app(app_state.clone()))
             ).await;
-            let req = test::TestRequest::with_header("content-type", "text/plain").uri("/store").to_request();
+            let req = test::TestRequest::post()
+                .header("Content-Type", "text/foo")
+                .uri("/store")
+                .to_request();
             let resp = test::call_service(&mut app, req).await;
             assert_eq!(resp.status(), http::StatusCode::UNSUPPORTED_MEDIA_TYPE);
         }
