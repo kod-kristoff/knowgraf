@@ -79,7 +79,7 @@ async fn post_store(req: HttpRequest, data: web::Data<AppState>, body: String) -
                     io::BufReader::new(io::Cursor::new(body)),
                     format,
                     None
-                )?;
+                ).map_err(AppError::BadInput)?;
             return Ok(HttpResponse::NoContent().finish());
         } else {
             println!("no supported media type");
@@ -103,6 +103,8 @@ struct QueryData {
 enum AppError {
     #[display(fmt = "io error")]
     IoError(io::Error),
+    #[display(fmt = "bad input: {}", _0)]
+    BadInput(io::Error),
 }
 
 impl error::ResponseError for AppError {
@@ -115,6 +117,7 @@ impl error::ResponseError for AppError {
 
     fn status_code(&self) -> http::StatusCode {
         match *self {
+            AppError::BadInput(_) => http::StatusCode::BAD_REQUEST,
             _ => http::StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
