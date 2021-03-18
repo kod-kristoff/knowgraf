@@ -1,6 +1,7 @@
 use oxigraph::SledStore;
 use oxigraph::io::DatasetFormat;
 use oxigraph::io::GraphFormat;
+use oxigraph::model;
 use actix_files::NamedFile;
 use actix_web::{
     get,
@@ -68,6 +69,8 @@ async fn get_query(form: web::Query<QueryData>) -> impl Responder {
 
 // #[post("/store")]
 async fn post_store(req: HttpRequest, data: web::Data<AppState>, body: String) -> Result<HttpResponse, AppError> {
+    use oxigraph::model::NamedNode;
+
     if let Some(content_type) = req.headers().get("content-type") {
         let content_type = content_type.to_str().unwrap();
         println!("content-type: {:?}", content_type);
@@ -81,6 +84,21 @@ async fn post_store(req: HttpRequest, data: web::Data<AppState>, body: String) -
                     None
                 ).map_err(AppError::BadInput)?;
             return Ok(HttpResponse::NoContent().finish());
+        } else if let Some(format) = GraphFormat::from_media_type(content_type) {
+            let graph = NamedNode::new(
+                base_url(&req, Some(&format!("/store/{:x}", rand::random::<u128>())))?.to_string()
+            )?;
+
+            data.store
+                .load_graph(
+                    io::BufReader::new(io::Cursor::new(body)),
+                    format,
+                    &graph,
+                    None
+            )?;
+            Ok(HttpResponse::Created()
+                .header(http::header::LOCATION, graph.into_string())
+                .finish())
         } else {
             println!("no supported media type");
             Ok(HttpResponse::UnsupportedMediaType().body(format!("No supported Content-Type given: {}", content_type)))
@@ -105,6 +123,10 @@ enum AppError {
     IoError(io::Error),
     #[display(fmt = "bad input: {}", _0)]
     BadInput(io::Error),
+    #[display(fmt = "bad url: {}", _0)]
+    BadUrl(actix_web::client::HttpError),
+    #[display(fmt = "url parse error: {}", _0)]
+    UrlParseError(model::IriParseError),
 }
 
 impl error::ResponseError for AppError {
@@ -118,6 +140,7 @@ impl error::ResponseError for AppError {
     fn status_code(&self) -> http::StatusCode {
         match *self {
             AppError::BadInput(_) => http::StatusCode::BAD_REQUEST,
+            AppError::BadUrl(_) => http::StatusCode::BAD_REQUEST,
             _ => http::StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -129,11 +152,51 @@ impl From<io::Error> for AppError {
     }
 }
 
+impl From<model::IriParseError> for AppError {
+    fn from(err: model::IriParseError) -> AppError {
+        AppError::UrlParseError(err)
+    }
+}
+
+fn base_url(request: &HttpRequest, path: Option<&str>) -> Result<http::Uri, AppError> {
+    let mut uri = http::Uri::builder();
+    if let Some(scheme) = request.uri().scheme() {
+        uri = uri.scheme(scheme.as_str());
+    }
+    if let Some(host) = request.uri().host() {
+        uri = uri.authority(host)
+    }
+    if let Some(path) = path {
+        uri = uri.path_and_query(path);
+    } else {
+        uri = uri.path_and_query(request.uri().path());
+    }
+    Ok(uri.build().map_err(AppError::BadUrl)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use actix_web::{http, test, App};
     use tempfile::{tempdir};
+
+    mod utils {
+        use super::*;
+
+        #[test]
+        fn absolute_uri() {
+            let req = test::TestRequest::with_uri("http://example.com/eat?my=shorts")
+                .to_http_request();
+            assert_eq!(base_url(&req, None).unwrap(), http::Uri::from_static("http://example.com/eat"));
+        }
+
+        #[test]
+        fn absolute_uri_replace_path() {
+            let req = test::TestRequest::with_uri("http://example.com/eat?my=shorts")
+                .to_http_request();
+            assert_eq!(base_url(&req, Some("/store/foo")).unwrap(), http::Uri::from_static("http://example.com/store/foo"));
+        }
+    }
 
     #[actix_rt::test]
     async fn get_ui() {
@@ -172,6 +235,29 @@ mod tests {
                 .to_request();
             let resp = test::call_service(&mut app, req).await;
             assert_eq!(resp.status(), http::StatusCode::NO_CONTENT);
+        }
+
+        #[actix_rt::test]
+        async fn post_graph_file() {
+            let path = tempdir().unwrap();
+            let app_state = web::Data::new(
+                AppState {
+                    store: SledStore::open(path.path()).unwrap()
+                }
+            );
+            let mut app = test::init_service(
+                App::new()
+                    .configure(
+                        config_app(app_state.clone()))
+            ).await;
+            let req = test::TestRequest::post()
+                .uri("/store")
+                .header("Content-Type", "text/turtle")
+                .set_payload("<http://example.com/ns/data#i01> <http://example.com/ns/book#firstName> \"Richard\" .")
+                .to_request();
+            let resp = test::call_service(&mut app, req).await;
+            assert_eq!(resp.status(), http::StatusCode::CREATED);
+            assert!(resp.headers().get(http::header::LOCATION).is_some());
         }
 
         #[actix_rt::test]
