@@ -186,7 +186,7 @@ async fn put_store(request: HttpRequest, info: web::Query<StoreGraphInfo>, state
                 };
                 state.store
                     .load_graph(
-                        io::BufReader
+                        io::BufReader::new(SyncAsyncReader::from_request(&request, payload))
                     )
                 todo!("got a target & format")
             } else {
