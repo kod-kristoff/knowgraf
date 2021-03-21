@@ -73,7 +73,7 @@ async fn get_index() -> Result<NamedFile, AppError> {
 async fn get_query(request: HttpRequest, state: web::Data<AppState>) -> Result<HttpResponse, AppError> {
 //     log::info!("query: {:?}", form);
 //     format!("get_query: {:?}", form)
-    configure_and_evaluate_sparql_query(state, &url_query(&request), None, request) 
+    configure_and_evaluate_sparql_query(state, &url_query(&request), None, request)
 }
 
 async fn post_query(request: HttpRequest, state: web::Data<AppState>, payload: web::Payload) -> Result<HttpResponse, AppError> {
@@ -150,15 +150,44 @@ async fn post_store(req: HttpRequest, data: web::Data<AppState>, body: String, i
     }
 }
 
-async fn put_store(request: HttpRequest, info: web::Query<StoreGraphInfo>) -> Result<HttpResponse, AppError> {
+async fn put_store(request: HttpRequest, info: web::Query<StoreGraphInfo>, state: web::Data<AppState>) -> Result<HttpResponse, AppError> {
     use http::header;
     use mime::Mime;
     use std::str::FromStr;
+    use model::GraphName;
 
     if let Some(content_type) = request.headers().get(header::CONTENT_TYPE) {
         let content_type: Mime = Mime::from_str(content_type.to_str()?)?;
         if let Some(target) = store_target(&request, info.into_inner())? {
             if let Some(format) = GraphFormat::from_media_type(content_type.essence_str()) {
+                let new = !match &target {
+                    GraphName::NamedNode(target) => {
+                        if state.store.contains_named_graph(target)? {
+                            state.store.clear_graph(target)?;
+                            true
+                        } else {
+                            state.store.insert_named_graph(target)?;
+                            false
+                        }
+                    },
+                    GraphName::BlankNode(target) => {
+                        if state.store.contains_named_graph(target)? {
+                            state.store.clear_graph(target)?;
+                            true
+                        } else {
+                            state.store.insert_named_graph(target)?;
+                            false
+                        }
+                    },
+                    GraphName::DefaultGraph => {
+                        state.store.clear_graph(&target)?;
+                        true
+                    }
+                };
+                state.store
+                    .load_graph(
+                        io::BufReader
+                    )
                 todo!("got a target & format")
             } else {
                 Ok(HttpResponse::UnsupportedMediaType()
@@ -345,7 +374,7 @@ fn content_negotiation<F>(
             let h_str = h.to_str().unwrap();
             let q_item: header::QualityItem<Mime> = header::QualityItem::from_str(h_str).unwrap();
             q_item
-        }) 
+        })
         .collect();
     if accept_vec.is_empty() {
         parse(supported.first().ok_or_else(|| {
@@ -670,7 +699,7 @@ mod tests {
 
     mod query {
         use super::*;
-        
+
         #[actix_rt::test]
         async fn get_query() {
             let path = tempdir().unwrap();
