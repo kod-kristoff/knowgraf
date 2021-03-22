@@ -59,6 +59,7 @@ fn config_app(app_state: web::Data<AppState>) -> Box<dyn Fn(&mut web::ServiceCon
             .service(
                 web::resource("/store/{tail:.*}")
                     .route(web::put().to(put_store))
+                    .route(web::head().to(head_store))
             );
     })
 }
@@ -106,6 +107,24 @@ async fn post_query(request: HttpRequest, state: web::Data<AppState>, payload: w
     }
 }
 
+async fn head_store(request: HttpRequest, info: web::Query<StoreGraphInfo>, state: web::Data<AppState>) -> Result<HttpResponse, AppError> {
+    use model::GraphName;
+
+    if let Some(target) = store_target(&request, info.into_inner())? {
+        if match &target {
+            GraphName::DefaultGraph => true,
+            GraphName::NamedNode(target) => state.store.contains_named_graph(target)?,
+            GraphName::BlankNode(target) => state.store.contains_named_graph(target)?,
+        } {
+            Ok(HttpResponse::Ok().finish())
+        } else {
+            Ok(HttpResponse::NotFound()
+                .body(format!("The graph {} does not exists", target)))
+        }
+    } else {
+        Ok(HttpResponse::Ok().finish())
+    }
+}
 // #[post("/store")]
 async fn post_store(req: HttpRequest, data: web::Data<AppState>, body: String, info: web::Query<StoreGraphInfo>) -> Result<HttpResponse, AppError> {
     use oxigraph::model::NamedNode;
@@ -960,5 +979,13 @@ mod tests {
             .to_request();
         let resp = test::call_service(&mut app, req).await;
         assert_eq!(resp.status(), http::StatusCode::CREATED);
+
+        // HEAD on an existing graph
+        let req = test::TestRequest::default()
+            .method(http::Method::HEAD)
+            .uri("http://localhost/store/person/1.ttl")
+            .to_request();
+        let resp = test::call_service(&mut app, req).await;
+        assert_eq!(resp.status(), http::StatusCode::OK);
     }
 }
