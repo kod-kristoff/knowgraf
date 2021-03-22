@@ -150,7 +150,7 @@ async fn post_store(req: HttpRequest, data: web::Data<AppState>, body: String, i
     }
 }
 
-async fn put_store(request: HttpRequest, info: web::Query<StoreGraphInfo>, state: web::Data<AppState>) -> Result<HttpResponse, AppError> {
+async fn put_store(request: HttpRequest, info: web::Query<StoreGraphInfo>, payload: web::Bytes, state: web::Data<AppState>) -> Result<HttpResponse, AppError> {
     use http::header;
     use mime::Mime;
     use std::str::FromStr;
@@ -186,9 +186,16 @@ async fn put_store(request: HttpRequest, info: web::Query<StoreGraphInfo>, state
                 };
                 state.store
                     .load_graph(
-                        io::BufReader::new(SyncAsyncReader::from_request(&request, payload))
-                    )
-                todo!("got a target & format")
+                        io::BufReader::new(io::Cursor::new(payload)),
+                        format,
+                        &target,
+                        None
+                    )?;
+                if new {
+                    Ok(HttpResponse::Created().finish())
+                } else {
+                    Ok(HttpResponse::Ok().finish())
+                }
             } else {
                 Ok(HttpResponse::UnsupportedMediaType()
                     .body(format!("No supported Content-Type given: {}", content_type)))
@@ -204,6 +211,8 @@ async fn put_store(request: HttpRequest, info: web::Query<StoreGraphInfo>, state
             .body("No Content-Type given"))
     }
 }
+
+
 #[derive(Deserialize, Debug)]
 struct StoreGraphInfo {
     default: Option<String>,
