@@ -60,6 +60,7 @@ fn config_app(app_state: web::Data<AppState>) -> Box<dyn Fn(&mut web::ServiceCon
                 web::resource("/store/{tail:.*}")
                     .route(web::put().to(put_store))
                     .route(web::head().to(head_store))
+                    .route(web::get().to(get_store))
             );
     })
 }
@@ -107,6 +108,10 @@ async fn post_query(request: HttpRequest, state: web::Data<AppState>, payload: w
     }
 }
 
+async fn get_store() -> Result<HttpResponse, AppError> {
+    todo!("get_store")
+}
+
 async fn head_store(request: HttpRequest, info: web::Query<StoreGraphInfo>, state: web::Data<AppState>) -> Result<HttpResponse, AppError> {
     use model::GraphName;
 
@@ -125,6 +130,7 @@ async fn head_store(request: HttpRequest, info: web::Query<StoreGraphInfo>, stat
         Ok(HttpResponse::Ok().finish())
     }
 }
+
 // #[post("/store")]
 async fn post_store(req: HttpRequest, data: web::Data<AppState>, body: String, info: web::Query<StoreGraphInfo>) -> Result<HttpResponse, AppError> {
     use oxigraph::model::NamedNode;
@@ -213,7 +219,7 @@ async fn put_store(request: HttpRequest, info: web::Query<StoreGraphInfo>, paylo
                 if new {
                     Ok(HttpResponse::Created().finish())
                 } else {
-                    Ok(HttpResponse::Ok().finish())
+                    Ok(HttpResponse::NoContent().finish())
                 }
             } else {
                 Ok(HttpResponse::UnsupportedMediaType()
@@ -962,6 +968,7 @@ mod tests {
         ).await;
 
         // PUT - Initial state
+        println!("PUT - Initial state");
         let req = test::TestRequest::put()
             .uri("http://localhost/store/person/1.ttl")
             .header("Content-Type", "text/turtle; charset=utf-8")
@@ -981,9 +988,48 @@ mod tests {
         assert_eq!(resp.status(), http::StatusCode::CREATED);
 
         // HEAD on an existing graph
+        println!("HEAD on an existing graph");
         let req = test::TestRequest::default()
             .method(http::Method::HEAD)
             .uri("http://localhost/store/person/1.ttl")
+            .to_request();
+        let resp = test::call_service(&mut app, req).await;
+        assert_eq!(resp.status(), http::StatusCode::OK);
+
+        // HEAD on an non-existing graph
+        println!("HEAD on an non-existing graph");
+        let req = test::TestRequest::default()
+            .method(http::Method::HEAD)
+            .uri("http://localhost/store/person/4.ttl")
+            .to_request();
+        let resp = test::call_service(&mut app, req).await;
+        assert_eq!(resp.status(), http::StatusCode::NOT_FOUND);
+
+        // PUT - graph already in store
+        println!("PUT - graph already in store");
+        let req = test::TestRequest::put()
+            .uri("http://localhost/store/person/1.ttl")
+            .header("Content-Type", "text/turtle; charset=utf-8")
+            .set_payload(
+            "
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+@prefix v: <http://www.w3.org/2006/vcard/ns#> .
+
+<http://$HOST$/$GRAPHSTORE$/person/1> a foaf:Person;
+    foaf:businessCard [
+        a v:VCard;
+        v:fn \"Jane Doe\"
+    ].
+")
+            .to_request();
+        let resp = test::call_service(&mut app, req).await;
+        assert_eq!(resp.status(), http::StatusCode::NO_CONTENT);
+
+        // GET of PUT - graph already in store
+        println!("GET of PUT - graph already in store");
+        let req = test::TestRequest::get()
+            .uri("http://localhost/store/person/1.ttl")
+            .header("Accept", "text/turtle")
             .to_request();
         let resp = test::call_service(&mut app, req).await;
         assert_eq!(resp.status(), http::StatusCode::OK);
