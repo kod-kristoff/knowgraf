@@ -52,15 +52,16 @@ fn config_app(app_state: web::Data<AppState>) -> Box<dyn Fn(&mut web::ServiceCon
                     .route(web::post().to(post_query))
             )
             // .service(get_query)
+            // .service(
+            //     web::resource("/store")
+            // )
             .service(
-                web::resource("/store")
-                    .route(web::post().to(post_store))
-            )
-            .service(
-                web::resource("/store/{tail:.*}")
+                web::resource("/{path:store.*}")
                     .route(web::put().to(put_store))
                     .route(web::head().to(head_store))
                     .route(web::get().to(get_store))
+                    .route(web::post().to(post_store))
+                    .route(web::delete().to(delete_store))
             );
     })
 }
@@ -108,8 +109,59 @@ async fn post_query(request: HttpRequest, state: web::Data<AppState>, payload: w
     }
 }
 
-async fn get_store() -> Result<HttpResponse, AppError> {
-    todo!("get_store")
+async fn delete_store(request: HttpRequest, info: web::Query<StoreGraphInfo>, state: web::Data<AppState>) -> Result<HttpResponse, AppError> {
+    use model::{GraphName, GraphNameRef};
+
+    if let Some(target) = store_target(&request, info.into_inner())? {
+        match target {
+            GraphName::DefaultGraph => state.store.clear_graph(GraphNameRef::DefaultGraph)?,
+            GraphName::NamedNode(target) => {
+                if state.store.contains_named_graph(&target)? {
+                    state.store.remove_named_graph(&target)?;
+                } else {
+                    return Ok(HttpResponse::NotFound()
+                       .body(format!("The graph {} does not exists", target)));
+                }
+            }
+            GraphName::BlankNode(target) => {
+                if state.store.contains_named_graph(&target)? {
+                    state.store.remove_named_graph(&target)?;
+                } else {
+                    return Ok(HttpResponse::NotFound()
+                       .body(format!("The graph {} does not exists", target)));
+                }
+            }
+        } 
+    } else {
+        state.store.clear()?;
+    }
+    Ok(HttpResponse::NoContent().finish())
+}
+
+async fn get_store(request: HttpRequest, info: web::Query<StoreGraphInfo>, state: web::Data<AppState>) -> Result<HttpResponse, AppError> {
+    use model::GraphName;
+
+    let mut body = Vec::default();
+    let format = if let Some(target) = store_target(&request, info.into_inner())? {
+        if !match &target {
+            GraphName::DefaultGraph => true,
+            GraphName::NamedNode(target) => state.store.contains_named_graph(target)?,
+            GraphName::BlankNode(target) => state.store.contains_named_graph(target)?,
+        } {
+            return Ok(HttpResponse::NotFound()
+                .body(format!("The graph {} does not exists", target)));
+        }
+        let format = graph_content_negotiation(request)?;
+        state.store.dump_graph(&mut body, format, &target)?;
+        format.media_type()
+    } else {
+        let format = dataset_content_negotiation(request)?;
+        state.store.dump_dataset(&mut body, format)?;
+        format.media_type()
+    };
+    Ok(HttpResponse::Ok()
+        .header(http::header::CONTENT_TYPE, format)
+        .body(body))
 }
 
 async fn head_store(request: HttpRequest, info: web::Query<StoreGraphInfo>, state: web::Data<AppState>) -> Result<HttpResponse, AppError> {
@@ -132,29 +184,52 @@ async fn head_store(request: HttpRequest, info: web::Query<StoreGraphInfo>, stat
 }
 
 // #[post("/store")]
-async fn post_store(req: HttpRequest, data: web::Data<AppState>, body: String, info: web::Query<StoreGraphInfo>) -> Result<HttpResponse, AppError> {
-    use oxigraph::model::NamedNode;
+async fn post_store(req: HttpRequest, state: web::Data<AppState>, body: String, info: web::Query<StoreGraphInfo>) -> Result<HttpResponse, AppError> {
+    use model::{GraphName, NamedNode};
+    use mime::Mime;
+    use std::str::FromStr;
 
     if let Some(content_type) = req.headers().get("content-type") {
-        let content_type = content_type.to_str()?;
+        let content_type: Mime = Mime::from_str(content_type.to_str()?)?;
         println!("content-type: {:?}", content_type);
-        println!("graphformat: {:?}", GraphFormat::from_media_type(content_type));
-        println!("datasetformat: {:?}", DatasetFormat::from_media_type(content_type));
-        if let Some(format) = DatasetFormat::from_media_type(content_type) {
-            data.store
+        if let Some(target) = store_target(&req, info.into_inner())? {
+            if let Some(format) = GraphFormat::from_media_type(content_type.essence_str()) {
+                let new = !match &target {
+                    GraphName::NamedNode(target) => state.store.contains_named_graph(target)?,
+                    GraphName::BlankNode(target) => state.store.contains_named_graph(target)?,
+                    GraphName::DefaultGraph => true,
+                };
+                state.store
+                    .load_graph(
+                        io::BufReader::new(io::Cursor::new(body)),
+                        format,
+                        &target,
+                        None,
+                    )?;
+                Ok(if new {
+                    HttpResponse::Created().finish()
+                } else {
+                    HttpResponse::NoContent().finish()
+                })
+            } else {
+                Ok(HttpResponse::UnsupportedMediaType()
+                   .body(format!("No supported Content-Type given: {}", content_type)))
+            }
+        } else if let Some(format) = DatasetFormat::from_media_type(content_type.essence_str()) {
+            state.store
                 .load_dataset(
                     io::BufReader::new(io::Cursor::new(body)),
                     format,
                     None
                 ).map_err(AppError::BadInput)?;
             return Ok(HttpResponse::NoContent().finish());
-        } else if let Some(format) = GraphFormat::from_media_type(content_type) {
+        } else if let Some(format) = GraphFormat::from_media_type(content_type.essence_str()) {
             println!("url: {}", req.uri());
             let graph = NamedNode::new(
                 base_url(&req, Some(&format!("/store/{:x}", rand::random::<u128>())))?.to_string()
             )?;
 
-            data.store
+            state.store
                 .load_graph(
                     io::BufReader::new(io::Cursor::new(body)),
                     format,
@@ -168,7 +243,6 @@ async fn post_store(req: HttpRequest, data: web::Data<AppState>, body: String, i
             println!("no supported media type");
             Ok(HttpResponse::UnsupportedMediaType().body(format!("No supported Content-Type given: {}", content_type)))
         }
-        // Ok(HttpResponse::Ok().body(format!("target: {}\ncontent-type: {:?}", req.query_string(), content_type)))
     } else {
         println!("no content type");
         Ok(HttpResponse::BadRequest().body("No Content-Type given."))
@@ -181,8 +255,10 @@ async fn put_store(request: HttpRequest, info: web::Query<StoreGraphInfo>, paylo
     use std::str::FromStr;
     use model::GraphName;
 
+    println!("put_store: content_type = {:#?}", request.headers().get(header::CONTENT_TYPE));
     if let Some(content_type) = request.headers().get(header::CONTENT_TYPE) {
         let content_type: Mime = Mime::from_str(content_type.to_str()?)?;
+        println!("put_store: query = {:?}", info);
         if let Some(target) = store_target(&request, info.into_inner())? {
             if let Some(format) = GraphFormat::from_media_type(content_type.essence_str()) {
                 let new = !match &target {
@@ -270,7 +346,7 @@ fn configure_and_evaluate_sparql_query(
         match k.as_ref() {
             "query" => {
                 if query.is_some() {
-                    return Err(AppError::BadRequest("Multiple query parameters provided"));
+                    return Err(AppError::BadRequest(InnerError::Str("Multiple query parameters provided")));
                 }
                 query = Some(v.into_owned())
             }
@@ -284,7 +360,7 @@ fn configure_and_evaluate_sparql_query(
     if let Some(query) = query {
         evaluate_sparql_query(state, query, default_graph_uris, named_graph_uris, request)
     } else {
-        Err(AppError::BadRequest("You should set the 'query' parameter"))
+        Err(AppError::BadRequest(InnerError::Str("You should set the 'query' parameter")))
     }
 }
 
@@ -350,7 +426,7 @@ fn store_target(request: &HttpRequest, info: StoreGraphInfo) -> Result<Option<mo
     if request.uri().path() == "/store" {
         if let Some(graph) = info.graph {
             if info.default.is_some() {
-                Err(AppError::BadRequest("Both graph and default parameters should not be set at the same time"))
+                Err(AppError::BadRequest(InnerError::Str("Both graph and default parameters should not be set at the same time")))
             } else {
                 Ok(Some(NamedNode::new(
                     base_url(request, Some(&graph))?
@@ -448,7 +524,7 @@ enum AppError {
     #[display(fmt = "url parse error: {}", _0)]
     UrlParseError(model::IriParseError),
     #[display(fmt = "bad request: {}", _0)]
-    BadRequest(#[error(not(source))] &'static str),
+    BadRequest(InnerError),
     #[display(fmt = "bad request: {}", _0)]
     BadRequestString(#[error(not(source))] String),
     #[display(fmt = "internal server error")]
@@ -468,6 +544,7 @@ enum AppError {
 impl error::ResponseError for AppError {
     fn error_response(&self) -> HttpResponse {
         use actix_web::dev::HttpResponseBuilder;
+        println!("error: {:#?}", self);
         HttpResponseBuilder::new(self.status_code())
             .set_header(http::header::CONTENT_TYPE, "text/html; charset=utf-8")
             .body(self.to_string())
@@ -489,7 +566,12 @@ impl error::ResponseError for AppError {
 
 impl From<io::Error> for AppError {
     fn from(err: io::Error) -> AppError {
-        AppError::IoError(err)
+        use io::ErrorKind;
+
+        match err.kind() {
+            ErrorKind::UnexpectedEof => AppError::BadRequest(InnerError::IoError(err)),
+            _ => AppError::IoError(err),
+        }
     }
 }
 
@@ -537,6 +619,8 @@ enum InnerError {
     String(#[error(not(source))] String),
     #[display(fmt = "{}", _0)]
     MimeFromStr(mime::FromStrError),
+    #[display(fmt = "{}", _0)]
+    IoError(io::Error),
     #[display(fmt = "{}", _0)]
     ParseError(#[error(not(source))] error::ParseError),
 }
@@ -662,7 +746,7 @@ mod tests {
                 .set_payload("<http://example.com/ns/data#i01> <http://example.com/ns/book#firstName> \"Richard\" .")
                 .to_request();
             let resp = test::call_service(&mut app, req).await;
-            assert_eq!(resp.status(), http::StatusCode::CREATED);
+            assert_eq!(resp.status(), http::StatusCode::NO_CONTENT);
             assert!(resp.headers().get(http::header::LOCATION).is_some());
         }
 
@@ -1033,5 +1117,169 @@ mod tests {
             .to_request();
         let resp = test::call_service(&mut app, req).await;
         assert_eq!(resp.status(), http::StatusCode::OK);
+
+        // PUT - default graph
+        println!("PUT - default graph");
+        let req = test::TestRequest::put()
+            .uri("http://localhost/store?default")
+            .header("Content-Type", "text/turtle; charset=utf-8")
+            .set_payload(
+            "
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+@prefix v: <http://www.w3.org/2006/vcard/ns#> .
+
+[]  a foaf:Person;
+    foaf:businessCard [
+        a v:VCard;
+        v:given-name \"Alice\"
+    ] .
+")
+            .to_request();
+        let resp = test::call_service(&mut app, req).await;
+        assert_eq!(resp.status(), http::StatusCode::NO_CONTENT); // The default graph always exists in Oxigraph
+
+        // GET of PUT - default graph
+        println!("GET of PUT - default graph");
+        let req = test::TestRequest::get()
+            .uri("http://localhost/store?default")
+            .header("Accept", "text/turtle")
+            .to_request();
+        let resp = test::call_service(&mut app, req).await;
+        assert_eq!(resp.status(), http::StatusCode::OK);
+
+        // PUT - mismatched payload
+        println!("PUT - mismatched payload");
+        let req = test::TestRequest::put()
+            .uri("http://localhost/store/person/1.ttl")
+            .header("Content-Type", "text/turtle; charset=utf-8")
+            .set_payload("@prefix fo")
+            .to_request();
+        let resp = test::call_service(&mut app, req).await;
+        assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
+
+        // PUT - empty graph
+        println!("PUT - empty graph");
+        let req = test::TestRequest::put()
+            .uri("http://localhost/store/person/2.ttl")
+            .header("Content-Type", "text/turtle; charset=utf-8")
+            .to_request();
+        let resp = test::call_service(&mut app, req).await;
+        assert_eq!(resp.status(), http::StatusCode::CREATED);
+
+        // GET of PUT - empty graph
+        println!("GET of PUT - empty graph");
+        let req = test::TestRequest::get()
+            .uri("http://localhost/store/person/2.ttl")
+            .header("Accept", "text/turtle")
+            .to_request();
+        let resp = test::call_service(&mut app, req).await;
+        assert_eq!(resp.status(), http::StatusCode::OK);
+
+        // PUT - replace empty graph
+        println!("PUT - replace empty graph");
+        let req = test::TestRequest::put()
+            .uri("http://localhost/store/person/2.ttl")
+            .header("Content-Type", "text/turtle; charset=utf-8")
+            .set_payload(
+            "
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+@prefix v: <http://www.w3.org/2006/vcard/ns#> .
+
+[]  a foaf:Person;
+    foaf:businessCard [
+        a v:VCard;
+        v:given-name \"Alice\"
+    ] .
+")
+            .to_request();
+        let resp = test::call_service(&mut app, req).await;
+        assert_eq!(resp.status(), http::StatusCode::NO_CONTENT);
+
+        // GET of replacement for empty graph
+        let req = test::TestRequest::get()
+            .uri("http://localhost/store/person/2.ttl")
+            .header("Accept", "text/turtle")
+            .to_request();
+        let resp = test::call_service(&mut app, req).await;
+        assert_eq!(resp.status(), http::StatusCode::OK);
+
+        // DELETE - existing graph
+        println!("DELETE - existing graph");
+        let req = test::TestRequest::delete()
+            .uri("http://localhost/store/person/2.ttl")
+            .to_request();
+        let resp = test::call_service(&mut app, req).await;
+        assert_eq!(resp.status(), http::StatusCode::NO_CONTENT);
+
+        // GET of DELETE - existing graph
+        let req = test::TestRequest::get()
+            .uri("http://localhost/store/person/2.ttl")
+            .to_request();
+        let resp = test::call_service(&mut app, req).await;
+        assert_eq!(resp.status(), http::StatusCode::NOT_FOUND);
+
+        // DELETE - non-existent graph
+        let req = test::TestRequest::delete()
+            .uri("http://localhost/store/person/2.ttl")
+            .to_request();
+        let resp = test::call_service(&mut app, req).await;
+        assert_eq!(resp.status(), http::StatusCode::NOT_FOUND);
+
+        // POST - existing graph
+        let req = test::TestRequest::post()
+            .uri("http://localhost/store/person/1.ttl")
+            .header("Content-Type", "text/turtle; charset=utf-8")
+            .to_request();
+        let resp = test::call_service(&mut app, req).await;
+        assert_eq!(resp.status(), http::StatusCode::NO_CONTENT);
+
+        // TODO: POST - multipart/form-data
+        // TODO: GET of POST - multipart/form-data
+
+        // POST - create new graph
+        let req = test::TestRequest::post()
+            .uri("http://localhost/store")
+            .header("Content-Type", "text/turtle; charset=utf-8")
+            .set_payload(
+            "
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+@prefix v: <http://www.w3.org/2006/vcard/ns#> .
+
+[]  a foaf:Person;
+    foaf:businessCard [
+        a v:VCard;
+        v:given-name \"Alice\"
+    ] .
+")
+            .to_request();
+        let resp = test::call_service(&mut app, req).await;
+        assert_eq!(resp.status(), http::StatusCode::CREATED);
+        let location = resp.headers().get("Location").unwrap().to_str().unwrap();
+
+        // GET of POST - create new graph
+        let req = test::TestRequest::get()
+            .uri(location)
+            .header("Accept", "text/turtle")
+            .to_request();
+        let resp = test::call_service(&mut app, req).await;
+        assert_eq!(resp.status(), http::StatusCode::OK);
+
+        // POST - empty graph to existing graph
+        let req = test::TestRequest::post()
+            .uri(location)
+            .header("Content-Type", "text/turtle; charset=utf-8")
+            .to_request();
+        let resp = test::call_service(&mut app, req).await;
+        assert_eq!(resp.status(), http::StatusCode::NO_CONTENT);
+
+        // GET of POST - after noop
+        let req = test::TestRequest::get()
+            .uri(location)
+            .header("Accept", "text/turtle")
+            .to_request();
+        let resp = test::call_service(&mut app, req).await;
+        assert_eq!(resp.status(), http::StatusCode::OK);
+
+
     }
 }
