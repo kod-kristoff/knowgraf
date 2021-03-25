@@ -1157,7 +1157,7 @@ mod tests {
                     .configure(
                         config_app(app_state.clone()))
             ).await;
-            let req = test::TestRequest::get()
+            let req = test::TestRequest::post()
                 .uri("http://localhost/query")
                 .header("Content-Type", "application/x-www-urlencoded")
                 .set_payload("query=SELECT%20*%20WHERE%20{%20?s%20?p%20?o%20}")
