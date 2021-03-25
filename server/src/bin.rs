@@ -1159,7 +1159,7 @@ mod tests {
             ).await;
             let req = test::TestRequest::post()
                 .uri("http://localhost/query")
-                .header("Content-Type", "application/x-www-urlencoded")
+                .header("Content-Type", "application/x-www-form-urlencoded")
                 .set_payload("query=SELECT%20*%20WHERE%20{%20?s%20?p%20?o%20}")
                 .to_request();
             let resp = test::call_service(&mut app, req).await;
