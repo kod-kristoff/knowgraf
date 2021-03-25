@@ -1143,6 +1143,28 @@ mod tests {
             let resp = test::call_service(&mut app, req).await;
             assert_eq!(resp.status(), http::StatusCode::OK);
         }
+
+        #[actix_rt::test]
+        async fn post_query_form() {
+            let path = tempdir().unwrap();
+            let app_state = web::Data::new(
+                AppState {
+                    store: SledStore::open(path.path()).unwrap()
+                }
+            );
+            let mut app = test::init_service(
+                App::new()
+                    .configure(
+                        config_app(app_state.clone()))
+            ).await;
+            let req = test::TestRequest::get()
+                .uri("http://localhost/query")
+                .header("Content-Type", "application/x-www-urlencoded")
+                .set_payload("query=SELECT%20*%20WHERE%20{%20?s%20?p%20?o%20}")
+                .to_request();
+            let resp = test::call_service(&mut app, req).await;
+            assert_eq!(resp.status(), http::StatusCode::OK);
+        }
     }
 
     mod update {
