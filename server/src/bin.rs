@@ -52,9 +52,10 @@ fn config_app(app_state: web::Data<AppState>) -> Box<dyn Fn(&mut web::ServiceCon
                     .route(web::post().to(post_query))
             )
             // .service(get_query)
-            // .service(
-            //     web::resource("/store")
-            // )
+            .service(
+                web::resource("/update")
+                    .route(web::post().to(post_update))
+            )
             .service(
                 web::resource("/{path:store.*}")
                     .route(web::put().to(put_store))
@@ -313,6 +314,42 @@ async fn put_store(request: HttpRequest, info: web::Query<StoreGraphInfo>, paylo
     }
 }
 
+async fn post_update(request: HttpRequest, payload: web::Payload, state: web::Data<AppState>) -> Result<HttpResponse, AppError> {
+    use http::header;
+    use mime::Mime;
+    use std::str::FromStr;
+    use actix_web::FromRequest;
+
+    if let Some(content_type) = request.headers().get(header::CONTENT_TYPE) {
+        let content_type: Mime = Mime::from_str(content_type.to_str()?)?;
+        let mut payload = payload.into_inner();
+        if content_type.essence_str() == "application/sparql-update" {
+            let buffer = String::from_request(&request, &mut payload).await?;
+                        
+            configure_and_evaluate_sparql_update(
+                state,
+                &url_query(&request),
+                Some(buffer),
+                request,
+            )
+        } else if content_type.essence_str() == "application/x-www-form-urlencoded" {
+            let buffer = web::Bytes::from_request(&request, &mut payload).await?;
+            configure_and_evaluate_sparql_update(
+                state,
+                &buffer,
+                None,
+                request
+            )
+        } else {
+            Ok(HttpResponse::UnsupportedMediaType()
+               .body(format!("Not supported Content-Type given: {}", content_type)))
+        }
+    } else {
+        Ok(HttpResponse::BadRequest()
+           .body("No Content-Type given"))
+    }
+}
+
 
 #[derive(Deserialize, Debug)]
 struct StoreGraphInfo {
@@ -418,6 +455,79 @@ fn evaluate_sparql_query(
             .header(http::header::CONTENT_TYPE, format.media_type())
             .body(body))
     }
+}
+
+fn configure_and_evaluate_sparql_update(
+    state: web::Data<AppState>,
+    encoded: &[u8],
+    mut update: Option<String>,
+    request: HttpRequest,
+) -> Result<HttpResponse, AppError> {
+    let mut default_graph_uris = Vec::new();
+    let mut named_graph_uris = Vec::new();
+    for (k, v) in form_urlencoded::parse(&encoded) {
+        match k.as_ref() {
+            "update" => {
+                if update.is_some() {
+                    return Ok(HttpResponse::BadRequest()
+                       .body("Multiple update parameters provided"));
+                }
+                update = Some(v.into_owned())
+            }
+            "using-graph-uri" => default_graph_uris.push(v.into_owned()),
+            "using-named-graph-uri" => named_graph_uris.push(v.into_owned()),
+            _ => {
+                return Ok(HttpResponse::BadRequest()
+                    .body(format!("Unexpected parameter: {}", k)));
+            }
+        }
+    }
+    if let Some(update) = update {
+        evaluate_sparql_update(state, update, default_graph_uris, named_graph_uris, request)
+    } else {
+        Ok(HttpResponse::BadRequest()
+           .body("You should set the 'update' parameter"))
+    }
+}
+
+fn evaluate_sparql_update(
+    state: web::Data<AppState>,
+    update: String,
+    default_graph_uris: Vec<String>,
+    named_graph_uris: Vec<String>,
+    request: HttpRequest,
+    ) -> Result<HttpResponse, AppError> {
+    use sparql::{
+        algebra::{GraphUpdateOperation},
+        Update,
+    };
+    use model::{GraphName, NamedNode, NamedOrBlankNode};
+
+    let mut update =
+        Update::parse(&update, Some(&base_url(&request, None)?.to_string()))?;
+    let default_graph_uris = default_graph_uris
+        .into_iter()
+        .map(|e| Ok(NamedNode::new(e)?.into()))
+        .collect::<Result<Vec<GraphName>, AppError>>()?;
+    let named_graph_uris = named_graph_uris
+        .into_iter()
+        .map(|e| Ok(NamedNode::new(e)?.into()))
+        .collect::<Result<Vec<NamedOrBlankNode>, AppError>>()?;
+    if !default_graph_uris.is_empty() || !named_graph_uris.is_empty() {
+        for operation in &mut update.operations {
+            if let GraphUpdateOperation::DeleteInsert { using, .. } = operation {
+                if !using.is_default_dataset() {
+                    return Ok(HttpResponse::BadRequest()
+                       .body(
+                        "using-graph-uri and using-named-graph-uri must not be used with a SPARQL UPDATE containing USING"));
+                }
+                using.set_default_graph(default_graph_uris.clone());
+                using.set_available_named_graphs(named_graph_uris.clone());
+            }
+        }
+    }
+    state.store.update(update)?;
+    Ok(HttpResponse::NoContent().finish())
 }
 
 fn store_target(request: &HttpRequest, info: StoreGraphInfo) -> Result<Option<model::GraphName>, AppError> {
@@ -747,7 +857,7 @@ mod tests {
                 .to_request();
             let resp = test::call_service(&mut app, req).await;
             assert_eq!(resp.status(), http::StatusCode::NO_CONTENT);
-            assert!(resp.headers().get(http::header::LOCATION).is_some());
+            // assert!(resp.headers().get(http::header::LOCATION).is_some());
         }
 
         #[actix_rt::test]
@@ -1032,6 +1142,55 @@ mod tests {
                 .to_request();
             let resp = test::call_service(&mut app, req).await;
             assert_eq!(resp.status(), http::StatusCode::OK);
+        }
+    }
+
+    mod update {
+        use super::*;
+
+        #[actix_rt::test]
+        async fn post_update() {
+            let path = tempdir().unwrap();
+            let app_state = web::Data::new(
+                AppState {
+                    store: SledStore::open(path.path()).unwrap()
+                }
+            );
+            let mut app = test::init_service(
+                App::new()
+                    .configure(
+                        config_app(app_state.clone()))
+            ).await;
+            let req = test::TestRequest::post()
+                .uri("http://localhost/update")
+                .header("Content-Type", "application/sparql-update")
+            .set_payload(
+            "INSERT DATA { <http://example.com> <http://example.com> <http://example.com> }")
+            .to_request();
+            let resp = test::call_service(&mut app, req).await;
+            assert_eq!(resp.status(), http::StatusCode::NO_CONTENT);
+    }
+
+        #[actix_rt::test]
+        async fn post_bad_update() {
+            let path = tempdir().unwrap();
+            let app_state = web::Data::new(
+                AppState {
+                    store: SledStore::open(path.path()).unwrap()
+                }
+            );
+            let mut app = test::init_service(
+                App::new()
+                    .configure(
+                        config_app(app_state.clone()))
+            ).await;
+            let req = test::TestRequest::post()
+                .uri("http://localhost/update")
+                .header("Content-Type", "application/sparql-update")
+                .set_payload("INSERT")
+                .to_request();
+            let resp = test::call_service(&mut app, req).await;
+            assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
         }
     }
 
