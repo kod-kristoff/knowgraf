@@ -20,16 +20,18 @@ jobs:
           toolchain: stable
           override: true
 
-      - name: Run cargo-tarpaulin
-        uses: actions-rs/tarpaulin@v0.1
-        with:
-          version: '0.18.0-alpha3'
-          args: '-- --test-threads 1 --avoid-cfg-tarpaulin'
+      # - name: Run cargo-tarpaulin
+      #   uses: actions-rs/tarpaulin@v0.1
+      #   with:
+      #     version: '0.18.0-alpha3'
+      #     args: '-- --test-threads 1 --avoid-cfg-tarpaulin'
 
-      - name: Upload to codecov.io
-        uses: codecov/codecov-action@v1.0.2
-        with:
-          token: ${{secrets.CODECOV_TOKEN}}
+      # - name: Upload to codecov.io
+      #   uses: codecov/codecov-action@v1.0.2
+      #   with:
+      #     token: ${{secrets.CODECOV_TOKEN}}
+      - name: Run cargo test
+        run: cargo test
 
             #      - name: Archive code coverage results
             #        uses: actions/upload-artifact@v1
