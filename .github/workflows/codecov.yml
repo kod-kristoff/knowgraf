@@ -1,4 +1,8 @@
-on: [push]
+on:
+  push:
+    branches-ignore:
+      - staging    # Causes CI to run when Bors pushes to staging
+      - trying
 
 name: codecov
 
@@ -20,7 +24,7 @@ jobs:
         uses: actions-rs/tarpaulin@v0.1
         with:
           version: '0.18.0-alpha3'
-          args: '-- --test-threads 1'
+          args: '-- --test-threads 1 --avoid-cfg-tarpaulin'
 
       - name: Upload to codecov.io
         uses: codecov/codecov-action@v1.0.2
@@ -32,3 +36,29 @@ jobs:
             #        with:
             #          name: code-coverage-report
             #          path: cobertura.xml
+  build:
+    name: ${{ matrix.task.name }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: [check]
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        rust: [stable]
+        task:
+          - name: Format
+            run: cargo fmt -- --check
+          - name: Clippy
+            run: cargo clippy --all --all-targets --all-features --tests
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Install Rust ${{ matrix.rust }}
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust }}
+          profile: minimal
+          override: true
+          components: rustfmt, clippy
+
+      - name: ${{ matrix.task.name }}
+        run: ${{ matrix.task.run }}
