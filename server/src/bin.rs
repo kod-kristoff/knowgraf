@@ -315,7 +315,7 @@ async fn put_store(
                 Ok(HttpResponse::UnsupportedMediaType()
                     .body(format!("No supported Content-Type given: {}", content_type)))
             }
-        } else if let Some(format) = DatasetFormat::from_media_type(content_type.essence_str()) {
+        } else if let Some(_format) = DatasetFormat::from_media_type(content_type.essence_str()) {
             todo!("got a format")
         } else {
             Ok(HttpResponse::UnsupportedMediaType()
@@ -739,14 +739,14 @@ impl From<mime::FromStrError> for AppError {
 enum InnerError {
     #[display(fmt = "{}", _0)]
     Str(#[error(not(source))] &'static str),
-    #[display(fmt = "{}", _0)]
-    String(#[error(not(source))] String),
+    // #[display(fmt = "{}", _0)]
+    // String(#[error(not(source))] String),
     #[display(fmt = "{}", _0)]
     MimeFromStr(mime::FromStrError),
     #[display(fmt = "{}", _0)]
     IoError(io::Error),
-    #[display(fmt = "{}", _0)]
-    ParseError(#[error(not(source))] error::ParseError),
+    // #[display(fmt = "{}", _0)]
+    // ParseError(#[error(not(source))] error::ParseError),
 }
 
 fn base_url(request: &HttpRequest, path: Option<&str>) -> Result<http::Uri, AppError> {
