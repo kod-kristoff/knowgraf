@@ -1,20 +1,14 @@
-use oxigraph::SledStore;
+use actix_files::NamedFile;
+use actix_web::{error, http, web, HttpRequest, HttpResponse};
+use derive_more::{Display, Error};
 use oxigraph::io::DatasetFormat;
 use oxigraph::io::GraphFormat;
 use oxigraph::model;
 use oxigraph::sparql;
-use actix_files::NamedFile;
-use actix_web::{
-    web,
-    HttpRequest,
-    HttpResponse,
-    http,
-    error,
-};
+use oxigraph::SledStore;
 use serde_derive::Deserialize;
-use derive_more::{Display, Error};
-use std::path::PathBuf;
 use std::io;
+use std::path::PathBuf;
 
 struct AppState {
     store: SledStore,
@@ -26,43 +20,33 @@ async fn main() -> io::Result<()> {
     env_logger::init();
     println!("Starting server on 127.0.0.1:8080 ...");
     let app_state = web::Data::new(AppState {
-        store: SledStore::open("example.db")?
+        store: SledStore::open("example.db")?,
     });
 
-    HttpServer::new(move || {
-        App::new()
-            .configure(config_app(app_state.clone()))
-    })
-    .bind(("127.0.0.1", 8080))?
-    .run()
-    .await
-
+    HttpServer::new(move || App::new().configure(config_app(app_state.clone())))
+        .bind(("127.0.0.1", 8080))?
+        .run()
+        .await
 }
 
 fn config_app(app_state: web::Data<AppState>) -> Box<dyn Fn(&mut web::ServiceConfig)> {
     Box::new(move |cfg: &mut web::ServiceConfig| {
         cfg.app_data(app_state.clone())
-            .service(
-                web::resource("/")
-                    .route(web::get().to(get_index))
-            )
+            .service(web::resource("/").route(web::get().to(get_index)))
             .service(
                 web::resource("/query")
                     .route(web::get().to(get_query))
-                    .route(web::post().to(post_query))
+                    .route(web::post().to(post_query)),
             )
             // .service(get_query)
-            .service(
-                web::resource("/update")
-                    .route(web::post().to(post_update))
-            )
+            .service(web::resource("/update").route(web::post().to(post_update)))
             .service(
                 web::resource("/{path:store.*}")
                     .route(web::put().to(put_store))
                     .route(web::head().to(head_store))
                     .route(web::get().to(get_store))
                     .route(web::post().to(post_store))
-                    .route(web::delete().to(delete_store))
+                    .route(web::delete().to(delete_store)),
             );
     })
 }
@@ -74,16 +58,23 @@ async fn get_index() -> Result<NamedFile, AppError> {
 }
 
 // #[get("/query")]
-async fn get_query(request: HttpRequest, state: web::Data<AppState>) -> Result<HttpResponse, AppError> {
-//     log::info!("query: {:?}", form);
-//     format!("get_query: {:?}", form)
+async fn get_query(
+    request: HttpRequest,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, AppError> {
+    //     log::info!("query: {:?}", form);
+    //     format!("get_query: {:?}", form)
     configure_and_evaluate_sparql_query(state, &url_query(&request), None, request)
 }
 
-async fn post_query(request: HttpRequest, state: web::Data<AppState>, payload: web::Payload) -> Result<HttpResponse, AppError> {
-    use http::header;
-    use actix_web::FromRequest;
+async fn post_query(
+    request: HttpRequest,
+    state: web::Data<AppState>,
+    payload: web::Payload,
+) -> Result<HttpResponse, AppError> {
     use actix_web::dev;
+    use actix_web::FromRequest;
+    use http::header;
 
     let mut payload: dev::Payload = payload.into_inner();
 
@@ -101,16 +92,21 @@ async fn post_query(request: HttpRequest, state: web::Data<AppState>, payload: w
             let buffer = web::Bytes::from_request(&request, &mut payload).await?;
             configure_and_evaluate_sparql_query(state, &buffer, None, request)
         } else {
-            Ok(HttpResponse::UnsupportedMediaType()
-               .body(format!("Not supported Content-Type given: {}", content_type)))
+            Ok(HttpResponse::UnsupportedMediaType().body(format!(
+                "Not supported Content-Type given: {}",
+                content_type
+            )))
         }
     } else {
-        Ok(HttpResponse::BadRequest()
-            .body("No Content-Type given"))
+        Ok(HttpResponse::BadRequest().body("No Content-Type given"))
     }
 }
 
-async fn delete_store(request: HttpRequest, info: web::Query<StoreGraphInfo>, state: web::Data<AppState>) -> Result<HttpResponse, AppError> {
+async fn delete_store(
+    request: HttpRequest,
+    info: web::Query<StoreGraphInfo>,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, AppError> {
     use model::{GraphName, GraphNameRef};
 
     if let Some(target) = store_target(&request, info.into_inner())? {
@@ -121,7 +117,7 @@ async fn delete_store(request: HttpRequest, info: web::Query<StoreGraphInfo>, st
                     state.store.remove_named_graph(&target)?;
                 } else {
                     return Ok(HttpResponse::NotFound()
-                       .body(format!("The graph {} does not exists", target)));
+                        .body(format!("The graph {} does not exists", target)));
                 }
             }
             GraphName::BlankNode(target) => {
@@ -129,17 +125,21 @@ async fn delete_store(request: HttpRequest, info: web::Query<StoreGraphInfo>, st
                     state.store.remove_named_graph(&target)?;
                 } else {
                     return Ok(HttpResponse::NotFound()
-                       .body(format!("The graph {} does not exists", target)));
+                        .body(format!("The graph {} does not exists", target)));
                 }
             }
-        } 
+        }
     } else {
         state.store.clear()?;
     }
     Ok(HttpResponse::NoContent().finish())
 }
 
-async fn get_store(request: HttpRequest, info: web::Query<StoreGraphInfo>, state: web::Data<AppState>) -> Result<HttpResponse, AppError> {
+async fn get_store(
+    request: HttpRequest,
+    info: web::Query<StoreGraphInfo>,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, AppError> {
     use model::GraphName;
 
     let mut body = Vec::default();
@@ -149,8 +149,9 @@ async fn get_store(request: HttpRequest, info: web::Query<StoreGraphInfo>, state
             GraphName::NamedNode(target) => state.store.contains_named_graph(target)?,
             GraphName::BlankNode(target) => state.store.contains_named_graph(target)?,
         } {
-            return Ok(HttpResponse::NotFound()
-                .body(format!("The graph {} does not exists", target)));
+            return Ok(
+                HttpResponse::NotFound().body(format!("The graph {} does not exists", target))
+            );
         }
         let format = graph_content_negotiation(request)?;
         state.store.dump_graph(&mut body, format, &target)?;
@@ -165,7 +166,11 @@ async fn get_store(request: HttpRequest, info: web::Query<StoreGraphInfo>, state
         .body(body))
 }
 
-async fn head_store(request: HttpRequest, info: web::Query<StoreGraphInfo>, state: web::Data<AppState>) -> Result<HttpResponse, AppError> {
+async fn head_store(
+    request: HttpRequest,
+    info: web::Query<StoreGraphInfo>,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, AppError> {
     use model::GraphName;
 
     if let Some(target) = store_target(&request, info.into_inner())? {
@@ -176,8 +181,7 @@ async fn head_store(request: HttpRequest, info: web::Query<StoreGraphInfo>, stat
         } {
             Ok(HttpResponse::Ok().finish())
         } else {
-            Ok(HttpResponse::NotFound()
-                .body(format!("The graph {} does not exists", target)))
+            Ok(HttpResponse::NotFound().body(format!("The graph {} does not exists", target)))
         }
     } else {
         Ok(HttpResponse::Ok().finish())
@@ -185,9 +189,14 @@ async fn head_store(request: HttpRequest, info: web::Query<StoreGraphInfo>, stat
 }
 
 // #[post("/store")]
-async fn post_store(req: HttpRequest, state: web::Data<AppState>, body: String, info: web::Query<StoreGraphInfo>) -> Result<HttpResponse, AppError> {
-    use model::{GraphName, NamedNode};
+async fn post_store(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    body: String,
+    info: web::Query<StoreGraphInfo>,
+) -> Result<HttpResponse, AppError> {
     use mime::Mime;
+    use model::{GraphName, NamedNode};
     use std::str::FromStr;
 
     if let Some(content_type) = req.headers().get("content-type") {
@@ -200,13 +209,12 @@ async fn post_store(req: HttpRequest, state: web::Data<AppState>, body: String, 
                     GraphName::BlankNode(target) => state.store.contains_named_graph(target)?,
                     GraphName::DefaultGraph => true,
                 };
-                state.store
-                    .load_graph(
-                        io::BufReader::new(io::Cursor::new(body)),
-                        format,
-                        &target,
-                        None,
-                    )?;
+                state.store.load_graph(
+                    io::BufReader::new(io::Cursor::new(body)),
+                    format,
+                    &target,
+                    None,
+                )?;
                 Ok(if new {
                     HttpResponse::Created().finish()
                 } else {
@@ -214,35 +222,33 @@ async fn post_store(req: HttpRequest, state: web::Data<AppState>, body: String, 
                 })
             } else {
                 Ok(HttpResponse::UnsupportedMediaType()
-                   .body(format!("No supported Content-Type given: {}", content_type)))
+                    .body(format!("No supported Content-Type given: {}", content_type)))
             }
         } else if let Some(format) = DatasetFormat::from_media_type(content_type.essence_str()) {
-            state.store
-                .load_dataset(
-                    io::BufReader::new(io::Cursor::new(body)),
-                    format,
-                    None
-                ).map_err(AppError::BadInput)?;
+            state
+                .store
+                .load_dataset(io::BufReader::new(io::Cursor::new(body)), format, None)
+                .map_err(AppError::BadInput)?;
             return Ok(HttpResponse::NoContent().finish());
         } else if let Some(format) = GraphFormat::from_media_type(content_type.essence_str()) {
             println!("url: {}", req.uri());
             let graph = NamedNode::new(
-                base_url(&req, Some(&format!("/store/{:x}", rand::random::<u128>())))?.to_string()
+                base_url(&req, Some(&format!("/store/{:x}", rand::random::<u128>())))?.to_string(),
             )?;
 
-            state.store
-                .load_graph(
-                    io::BufReader::new(io::Cursor::new(body)),
-                    format,
-                    &graph,
-                    None
+            state.store.load_graph(
+                io::BufReader::new(io::Cursor::new(body)),
+                format,
+                &graph,
+                None,
             )?;
             Ok(HttpResponse::Created()
                 .header(http::header::LOCATION, graph.into_string())
                 .finish())
         } else {
             println!("no supported media type");
-            Ok(HttpResponse::UnsupportedMediaType().body(format!("No supported Content-Type given: {}", content_type)))
+            Ok(HttpResponse::UnsupportedMediaType()
+                .body(format!("No supported Content-Type given: {}", content_type)))
         }
     } else {
         println!("no content type");
@@ -250,13 +256,21 @@ async fn post_store(req: HttpRequest, state: web::Data<AppState>, body: String, 
     }
 }
 
-async fn put_store(request: HttpRequest, info: web::Query<StoreGraphInfo>, payload: web::Bytes, state: web::Data<AppState>) -> Result<HttpResponse, AppError> {
+async fn put_store(
+    request: HttpRequest,
+    info: web::Query<StoreGraphInfo>,
+    payload: web::Bytes,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, AppError> {
     use http::header;
     use mime::Mime;
-    use std::str::FromStr;
     use model::GraphName;
+    use std::str::FromStr;
 
-    println!("put_store: content_type = {:#?}", request.headers().get(header::CONTENT_TYPE));
+    println!(
+        "put_store: content_type = {:#?}",
+        request.headers().get(header::CONTENT_TYPE)
+    );
     if let Some(content_type) = request.headers().get(header::CONTENT_TYPE) {
         let content_type: Mime = Mime::from_str(content_type.to_str()?)?;
         println!("put_store: query = {:?}", info);
@@ -271,7 +285,7 @@ async fn put_store(request: HttpRequest, info: web::Query<StoreGraphInfo>, paylo
                             state.store.insert_named_graph(target)?;
                             false
                         }
-                    },
+                    }
                     GraphName::BlankNode(target) => {
                         if state.store.contains_named_graph(target)? {
                             state.store.clear_graph(target)?;
@@ -280,19 +294,18 @@ async fn put_store(request: HttpRequest, info: web::Query<StoreGraphInfo>, paylo
                             state.store.insert_named_graph(target)?;
                             false
                         }
-                    },
+                    }
                     GraphName::DefaultGraph => {
                         state.store.clear_graph(&target)?;
                         true
                     }
                 };
-                state.store
-                    .load_graph(
-                        io::BufReader::new(io::Cursor::new(payload)),
-                        format,
-                        &target,
-                        None
-                    )?;
+                state.store.load_graph(
+                    io::BufReader::new(io::Cursor::new(payload)),
+                    format,
+                    &target,
+                    None,
+                )?;
                 if new {
                     Ok(HttpResponse::Created().finish())
                 } else {
@@ -309,47 +322,40 @@ async fn put_store(request: HttpRequest, info: web::Query<StoreGraphInfo>, paylo
                 .body(format!("No supported Content-Type given: {}", content_type)))
         }
     } else {
-        Ok(HttpResponse::BadRequest()
-            .body("No Content-Type given"))
+        Ok(HttpResponse::BadRequest().body("No Content-Type given"))
     }
 }
 
-async fn post_update(request: HttpRequest, payload: web::Payload, state: web::Data<AppState>) -> Result<HttpResponse, AppError> {
+async fn post_update(
+    request: HttpRequest,
+    payload: web::Payload,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, AppError> {
+    use actix_web::FromRequest;
     use http::header;
     use mime::Mime;
     use std::str::FromStr;
-    use actix_web::FromRequest;
 
     if let Some(content_type) = request.headers().get(header::CONTENT_TYPE) {
         let content_type: Mime = Mime::from_str(content_type.to_str()?)?;
         let mut payload = payload.into_inner();
         if content_type.essence_str() == "application/sparql-update" {
             let buffer = String::from_request(&request, &mut payload).await?;
-                        
-            configure_and_evaluate_sparql_update(
-                state,
-                &url_query(&request),
-                Some(buffer),
-                request,
-            )
+
+            configure_and_evaluate_sparql_update(state, &url_query(&request), Some(buffer), request)
         } else if content_type.essence_str() == "application/x-www-form-urlencoded" {
             let buffer = web::Bytes::from_request(&request, &mut payload).await?;
-            configure_and_evaluate_sparql_update(
-                state,
-                &buffer,
-                None,
-                request
-            )
+            configure_and_evaluate_sparql_update(state, &buffer, None, request)
         } else {
-            Ok(HttpResponse::UnsupportedMediaType()
-               .body(format!("Not supported Content-Type given: {}", content_type)))
+            Ok(HttpResponse::UnsupportedMediaType().body(format!(
+                "Not supported Content-Type given: {}",
+                content_type
+            )))
         }
     } else {
-        Ok(HttpResponse::BadRequest()
-           .body("No Content-Type given"))
+        Ok(HttpResponse::BadRequest().body("No Content-Type given"))
     }
 }
-
 
 #[derive(Deserialize, Debug)]
 struct StoreGraphInfo {
@@ -383,21 +389,28 @@ fn configure_and_evaluate_sparql_query(
         match k.as_ref() {
             "query" => {
                 if query.is_some() {
-                    return Err(AppError::BadRequest(InnerError::Str("Multiple query parameters provided")));
+                    return Err(AppError::BadRequest(InnerError::Str(
+                        "Multiple query parameters provided",
+                    )));
                 }
                 query = Some(v.into_owned())
             }
             "default-graph-uri" => default_graph_uris.push(v.into_owned()),
             "named-graph-uri" => named_graph_uris.push(v.into_owned()),
             _ => {
-                return Err(AppError::BadRequestString(format!("Unexpected parameter: {}", k)));
-            },
+                return Err(AppError::BadRequestString(format!(
+                    "Unexpected parameter: {}",
+                    k
+                )));
+            }
         }
     }
     if let Some(query) = query {
         evaluate_sparql_query(state, query, default_graph_uris, named_graph_uris, request)
     } else {
-        Err(AppError::BadRequest(InnerError::Str("You should set the 'query' parameter")))
+        Err(AppError::BadRequest(InnerError::Str(
+            "You should set the 'query' parameter",
+        )))
     }
 }
 
@@ -469,24 +482,23 @@ fn configure_and_evaluate_sparql_update(
         match k.as_ref() {
             "update" => {
                 if update.is_some() {
-                    return Ok(HttpResponse::BadRequest()
-                       .body("Multiple update parameters provided"));
+                    return Ok(
+                        HttpResponse::BadRequest().body("Multiple update parameters provided")
+                    );
                 }
                 update = Some(v.into_owned())
             }
             "using-graph-uri" => default_graph_uris.push(v.into_owned()),
             "using-named-graph-uri" => named_graph_uris.push(v.into_owned()),
             _ => {
-                return Ok(HttpResponse::BadRequest()
-                    .body(format!("Unexpected parameter: {}", k)));
+                return Ok(HttpResponse::BadRequest().body(format!("Unexpected parameter: {}", k)));
             }
         }
     }
     if let Some(update) = update {
         evaluate_sparql_update(state, update, default_graph_uris, named_graph_uris, request)
     } else {
-        Ok(HttpResponse::BadRequest()
-           .body("You should set the 'update' parameter"))
+        Ok(HttpResponse::BadRequest().body("You should set the 'update' parameter"))
     }
 }
 
@@ -496,15 +508,11 @@ fn evaluate_sparql_update(
     default_graph_uris: Vec<String>,
     named_graph_uris: Vec<String>,
     request: HttpRequest,
-    ) -> Result<HttpResponse, AppError> {
-    use sparql::{
-        algebra::{GraphUpdateOperation},
-        Update,
-    };
+) -> Result<HttpResponse, AppError> {
     use model::{GraphName, NamedNode, NamedOrBlankNode};
+    use sparql::{algebra::GraphUpdateOperation, Update};
 
-    let mut update =
-        Update::parse(&update, Some(&base_url(&request, None)?.to_string()))?;
+    let mut update = Update::parse(&update, Some(&base_url(&request, None)?.to_string()))?;
     let default_graph_uris = default_graph_uris
         .into_iter()
         .map(|e| Ok(NamedNode::new(e)?.into()))
@@ -530,18 +538,22 @@ fn evaluate_sparql_update(
     Ok(HttpResponse::NoContent().finish())
 }
 
-fn store_target(request: &HttpRequest, info: StoreGraphInfo) -> Result<Option<model::GraphName>, AppError> {
+fn store_target(
+    request: &HttpRequest,
+    info: StoreGraphInfo,
+) -> Result<Option<model::GraphName>, AppError> {
     use oxigraph::model::NamedNode;
 
     if request.uri().path() == "/store" {
         if let Some(graph) = info.graph {
             if info.default.is_some() {
-                Err(AppError::BadRequest(InnerError::Str("Both graph and default parameters should not be set at the same time")))
+                Err(AppError::BadRequest(InnerError::Str(
+                    "Both graph and default parameters should not be set at the same time",
+                )))
             } else {
-                Ok(Some(NamedNode::new(
-                    base_url(request, Some(&graph))?
-                        .to_string()
-                )?.into()))
+                Ok(Some(
+                    NamedNode::new(base_url(request, Some(&graph))?.to_string())?.into(),
+                ))
             }
         } else if info.default.is_some() {
             Ok(Some(model::GraphName::DefaultGraph))
@@ -549,9 +561,9 @@ fn store_target(request: &HttpRequest, info: StoreGraphInfo) -> Result<Option<mo
             Ok(None)
         }
     } else {
-        Ok(Some(NamedNode::new(
-            base_url(request, None)?.to_string()
-                              )?.into()))
+        Ok(Some(
+            NamedNode::new(base_url(request, None)?.to_string())?.into(),
+        ))
     }
 }
 
@@ -584,8 +596,8 @@ fn content_negotiation<F>(
     parse: impl Fn(&str) -> Option<F>,
 ) -> Result<F, AppError> {
     use http::header;
-    use std::str::FromStr;
     use mime::Mime;
+    use std::str::FromStr;
 
     let accept_vec: Vec<header::QualityItem<Mime>> = request
         .headers()
@@ -597,12 +609,11 @@ fn content_negotiation<F>(
         })
         .collect();
     if accept_vec.is_empty() {
-        parse(supported.first().ok_or_else(|| {
-            AppError::InternalServerError(
-                "No default MIME type provided"
-            )
-        })?)
-
+        parse(
+            supported
+                .first()
+                .ok_or_else(|| AppError::InternalServerError("No default MIME type provided"))?,
+        )
     } else {
         let accept = header::Accept(accept_vec);
         let supported: Vec<Mime> = supported
@@ -611,10 +622,13 @@ fn content_negotiation<F>(
             .collect();
         parse(negotiate(accept, &supported)?.essence_str())
     }
-    .ok_or_else(|| AppError::InternalServerError( "Unknown mime type"))
+    .ok_or_else(|| AppError::InternalServerError("Unknown mime type"))
 }
 
-fn negotiate(accept: http::header::Accept, supported: &Vec<mime::Mime>) -> Result<mime::Mime, AppError> {
+fn negotiate(
+    accept: http::header::Accept,
+    supported: &Vec<mime::Mime>,
+) -> Result<mime::Mime, AppError> {
     for accepted in accept.mime_precedence() {
         if supported.contains(&accepted) {
             return Ok(accepted);
@@ -755,35 +769,38 @@ fn base_url(request: &HttpRequest, path: Option<&str>) -> Result<http::Uri, AppE
 mod tests {
     use super::*;
     use actix_web::{http, test, App};
-    use tempfile::{tempdir};
+    use tempfile::tempdir;
 
     mod utils {
         use super::*;
 
         #[test]
         fn absolute_uri() {
-            let req = test::TestRequest::with_uri("http://example.com/eat?my=shorts")
-                .to_http_request();
-            assert_eq!(base_url(&req, None).unwrap(), http::Uri::from_static("http://example.com/eat"));
+            let req =
+                test::TestRequest::with_uri("http://example.com/eat?my=shorts").to_http_request();
+            assert_eq!(
+                base_url(&req, None).unwrap(),
+                http::Uri::from_static("http://example.com/eat")
+            );
         }
 
         #[test]
         fn absolute_uri_replace_path() {
-            let req = test::TestRequest::with_uri("http://example.com/eat?my=shorts")
-                .to_http_request();
-            assert_eq!(base_url(&req, Some("/store/foo")).unwrap(), http::Uri::from_static("http://example.com/store/foo"));
+            let req =
+                test::TestRequest::with_uri("http://example.com/eat?my=shorts").to_http_request();
+            assert_eq!(
+                base_url(&req, Some("/store/foo")).unwrap(),
+                http::Uri::from_static("http://example.com/store/foo")
+            );
         }
     }
 
     #[actix_rt::test]
     async fn get_ui() {
         let mut app = test::init_service(
-            App::new()
-                .service(
-                    web::resource("/")
-                        .route(web::get().to(get_index))
-                )
-        ).await;
+            App::new().service(web::resource("/").route(web::get().to(get_index))),
+        )
+        .await;
         let req = test::TestRequest::with_header("content-type", "text/plain").to_request();
         let resp = test::call_service(&mut app, req).await;
         assert!(resp.status().is_success());
@@ -795,16 +812,11 @@ mod tests {
         #[actix_rt::test]
         async fn post_dataset_file() {
             let path = tempdir().unwrap();
-            let app_state = web::Data::new(
-                AppState {
-                    store: SledStore::open(path.path()).unwrap()
-                }
-            );
-            let mut app = test::init_service(
-                App::new()
-                    .configure(
-                        config_app(app_state.clone()))
-            ).await;
+            let app_state = web::Data::new(AppState {
+                store: SledStore::open(path.path()).unwrap(),
+            });
+            let mut app =
+                test::init_service(App::new().configure(config_app(app_state.clone()))).await;
             let req = test::TestRequest::post()
                 .uri("/store")
                 .header("Content-Type", "application/trig")
@@ -817,16 +829,11 @@ mod tests {
         #[actix_rt::test]
         async fn post_graph_file() {
             let path = tempdir().unwrap();
-            let app_state = web::Data::new(
-                AppState {
-                    store: SledStore::open(path.path()).unwrap()
-                }
-            );
-            let mut app = test::init_service(
-                App::new()
-                    .configure(
-                        config_app(app_state.clone()))
-            ).await;
+            let app_state = web::Data::new(AppState {
+                store: SledStore::open(path.path()).unwrap(),
+            });
+            let mut app =
+                test::init_service(App::new().configure(config_app(app_state.clone()))).await;
             let req = test::TestRequest::post()
                 .uri("http://example.com/store")
                 .header("Content-Type", "text/turtle")
@@ -840,16 +847,11 @@ mod tests {
         #[actix_rt::test]
         async fn post_graph_file_default() {
             let path = tempdir().unwrap();
-            let app_state = web::Data::new(
-                AppState {
-                    store: SledStore::open(path.path()).unwrap()
-                }
-            );
-            let mut app = test::init_service(
-                App::new()
-                    .configure(
-                        config_app(app_state.clone()))
-            ).await;
+            let app_state = web::Data::new(AppState {
+                store: SledStore::open(path.path()).unwrap(),
+            });
+            let mut app =
+                test::init_service(App::new().configure(config_app(app_state.clone()))).await;
             let req = test::TestRequest::post()
                 .uri("http://example.com/store?default")
                 .header("Content-Type", "text/turtle")
@@ -863,19 +865,12 @@ mod tests {
         #[actix_rt::test]
         async fn post_no_content() {
             let path = tempdir().unwrap();
-            let app_state = web::Data::new(
-                AppState {
-                    store: SledStore::open(path.path()).unwrap()
-                }
-            );
-            let mut app = test::init_service(
-                App::new()
-                    .configure(
-                        config_app(app_state.clone()))
-            ).await;
-            let req = test::TestRequest::post()
-                .uri("/store")
-                .to_request();
+            let app_state = web::Data::new(AppState {
+                store: SledStore::open(path.path()).unwrap(),
+            });
+            let mut app =
+                test::init_service(App::new().configure(config_app(app_state.clone()))).await;
+            let req = test::TestRequest::post().uri("/store").to_request();
             let resp = test::call_service(&mut app, req).await;
             assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
         }
@@ -883,16 +878,11 @@ mod tests {
         #[actix_rt::test]
         async fn post_unsupported_file() {
             let path = tempdir().unwrap();
-            let app_state = web::Data::new(
-                AppState {
-                    store: SledStore::open(path.path()).unwrap()
-                }
-            );
-            let mut app = test::init_service(
-                App::new()
-                    .configure(
-                        config_app(app_state.clone()))
-            ).await;
+            let app_state = web::Data::new(AppState {
+                store: SledStore::open(path.path()).unwrap(),
+            });
+            let mut app =
+                test::init_service(App::new().configure(config_app(app_state.clone()))).await;
             let req = test::TestRequest::post()
                 .header("Content-Type", "text/foo")
                 .uri("/store")
@@ -904,16 +894,11 @@ mod tests {
         #[actix_rt::test]
         async fn post_wrong_file() {
             let path = tempdir().unwrap();
-            let app_state = web::Data::new(
-                AppState {
-                    store: SledStore::open(path.path()).unwrap()
-                }
-            );
-            let mut app = test::init_service(
-                App::new()
-                    .configure(
-                        config_app(app_state.clone()))
-            ).await;
+            let app_state = web::Data::new(AppState {
+                store: SledStore::open(path.path()).unwrap(),
+            });
+            let mut app =
+                test::init_service(App::new().configure(config_app(app_state.clone()))).await;
             let req = test::TestRequest::post()
                 .header("Content-Type", "application/trig")
                 .uri("/store")
@@ -922,7 +907,6 @@ mod tests {
             let resp = test::call_service(&mut app, req).await;
             assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
         }
-
     }
 
     mod query {
@@ -931,20 +915,13 @@ mod tests {
         #[actix_rt::test]
         async fn get_query() {
             let path = tempdir().unwrap();
-            let app_state = web::Data::new(
-                AppState {
-                    store: SledStore::open(path.path()).unwrap()
-                }
-            );
-            let mut app = test::init_service(
-                App::new()
-                    .configure(
-                        config_app(app_state.clone()))
-            ).await;
+            let app_state = web::Data::new(AppState {
+                store: SledStore::open(path.path()).unwrap(),
+            });
+            let mut app =
+                test::init_service(App::new().configure(config_app(app_state.clone()))).await;
             let req = test::TestRequest::get()
-                .uri(
-                    "http://localhost/query?query=SELECT%20*%20WHERE%20{%20?s%20?p%20?o%20}"
-                )
+                .uri("http://localhost/query?query=SELECT%20*%20WHERE%20{%20?s%20?p%20?o%20}")
                 .to_request();
             let resp = test::call_service(&mut app, req).await;
             assert_eq!(resp.status(), http::StatusCode::OK);
@@ -953,16 +930,11 @@ mod tests {
         #[actix_rt::test]
         async fn get_query_named_graph() {
             let path = tempdir().unwrap();
-            let app_state = web::Data::new(
-                AppState {
-                    store: SledStore::open(path.path()).unwrap()
-                }
-            );
-            let mut app = test::init_service(
-                App::new()
-                    .configure(
-                        config_app(app_state.clone()))
-            ).await;
+            let app_state = web::Data::new(AppState {
+                store: SledStore::open(path.path()).unwrap(),
+            });
+            let mut app =
+                test::init_service(App::new().configure(config_app(app_state.clone()))).await;
             let req = test::TestRequest::get()
                 .uri(
                     "http://localhost/query?query=SELECT%20*%20WHERE%20{%20?s%20?p%20?o%20}&named-graph-uri=http://example.com/a&named-graph-uri=http://example.com/b"
@@ -975,16 +947,11 @@ mod tests {
         #[actix_rt::test]
         async fn get_query_default_graph() {
             let path = tempdir().unwrap();
-            let app_state = web::Data::new(
-                AppState {
-                    store: SledStore::open(path.path()).unwrap()
-                }
-            );
-            let mut app = test::init_service(
-                App::new()
-                    .configure(
-                        config_app(app_state.clone()))
-            ).await;
+            let app_state = web::Data::new(AppState {
+                store: SledStore::open(path.path()).unwrap(),
+            });
+            let mut app =
+                test::init_service(App::new().configure(config_app(app_state.clone()))).await;
             let req = test::TestRequest::get()
                 .uri(
                     "http://localhost/query?query=SELECT%20*%20WHERE%20{%20?s%20?p%20?o%20}&default-graph-uri=http://example.com/a&default-graph-uri=http://example.com/b"
@@ -997,16 +964,11 @@ mod tests {
         #[actix_rt::test]
         async fn get_bad_query() {
             let path = tempdir().unwrap();
-            let app_state = web::Data::new(
-                AppState {
-                    store: SledStore::open(path.path()).unwrap()
-                }
-            );
-            let mut app = test::init_service(
-                App::new()
-                    .configure(
-                        config_app(app_state.clone()))
-            ).await;
+            let app_state = web::Data::new(AppState {
+                store: SledStore::open(path.path()).unwrap(),
+            });
+            let mut app =
+                test::init_service(App::new().configure(config_app(app_state.clone()))).await;
             let req = test::TestRequest::get()
                 .uri("http://localhost/query?query=SELECT")
                 .to_request();
@@ -1017,16 +979,11 @@ mod tests {
         #[actix_rt::test]
         async fn get_without_query() {
             let path = tempdir().unwrap();
-            let app_state = web::Data::new(
-                AppState {
-                    store: SledStore::open(path.path()).unwrap()
-                }
-            );
-            let mut app = test::init_service(
-                App::new()
-                    .configure(
-                        config_app(app_state.clone()))
-            ).await;
+            let app_state = web::Data::new(AppState {
+                store: SledStore::open(path.path()).unwrap(),
+            });
+            let mut app =
+                test::init_service(App::new().configure(config_app(app_state.clone()))).await;
             let req = test::TestRequest::get()
                 .uri("http://localhost/query")
                 .to_request();
@@ -1037,16 +994,11 @@ mod tests {
         #[actix_rt::test]
         async fn post_query() {
             let path = tempdir().unwrap();
-            let app_state = web::Data::new(
-                AppState {
-                    store: SledStore::open(path.path()).unwrap()
-                }
-            );
-            let mut app = test::init_service(
-                App::new()
-                    .configure(
-                        config_app(app_state.clone()))
-            ).await;
+            let app_state = web::Data::new(AppState {
+                store: SledStore::open(path.path()).unwrap(),
+            });
+            let mut app =
+                test::init_service(App::new().configure(config_app(app_state.clone()))).await;
             let req = test::TestRequest::post()
                 .uri("http://localhost/query")
                 .header("Content-type", "application/sparql-query")
@@ -1060,16 +1012,11 @@ mod tests {
         #[actix_rt::test]
         async fn post_bad_query() {
             let path = tempdir().unwrap();
-            let app_state = web::Data::new(
-                AppState {
-                    store: SledStore::open(path.path()).unwrap()
-                }
-            );
-            let mut app = test::init_service(
-                App::new()
-                    .configure(
-                        config_app(app_state.clone()))
-            ).await;
+            let app_state = web::Data::new(AppState {
+                store: SledStore::open(path.path()).unwrap(),
+            });
+            let mut app =
+                test::init_service(App::new().configure(config_app(app_state.clone()))).await;
             let req = test::TestRequest::post()
                 .uri("http://localhost/query")
                 .header("Content-type", "application/sparql-query")
@@ -1082,16 +1029,11 @@ mod tests {
         #[actix_rt::test]
         async fn post_unknown_query() {
             let path = tempdir().unwrap();
-            let app_state = web::Data::new(
-                AppState {
-                    store: SledStore::open(path.path()).unwrap()
-                }
-            );
-            let mut app = test::init_service(
-                App::new()
-                    .configure(
-                        config_app(app_state.clone()))
-            ).await;
+            let app_state = web::Data::new(AppState {
+                store: SledStore::open(path.path()).unwrap(),
+            });
+            let mut app =
+                test::init_service(App::new().configure(config_app(app_state.clone()))).await;
             let req = test::TestRequest::post()
                 .uri("http://localhost/query")
                 .header("Content-type", "application/sparql-todo")
@@ -1104,16 +1046,11 @@ mod tests {
         #[actix_rt::test]
         async fn post_query_no_content_type() {
             let path = tempdir().unwrap();
-            let app_state = web::Data::new(
-                AppState {
-                    store: SledStore::open(path.path()).unwrap()
-                }
-            );
-            let mut app = test::init_service(
-                App::new()
-                    .configure(
-                        config_app(app_state.clone()))
-            ).await;
+            let app_state = web::Data::new(AppState {
+                store: SledStore::open(path.path()).unwrap(),
+            });
+            let mut app =
+                test::init_service(App::new().configure(config_app(app_state.clone()))).await;
             let req = test::TestRequest::post()
                 .uri("http://localhost/query")
                 .set_payload("SELECT")
@@ -1125,16 +1062,11 @@ mod tests {
         #[actix_rt::test]
         async fn post_federated_query() {
             let path = tempdir().unwrap();
-            let app_state = web::Data::new(
-                AppState {
-                    store: SledStore::open(path.path()).unwrap()
-                }
-            );
-            let mut app = test::init_service(
-                App::new()
-                    .configure(
-                        config_app(app_state.clone()))
-            ).await;
+            let app_state = web::Data::new(AppState {
+                store: SledStore::open(path.path()).unwrap(),
+            });
+            let mut app =
+                test::init_service(App::new().configure(config_app(app_state.clone()))).await;
             let req = test::TestRequest::post()
                 .uri("http://localhost/query")
                 .header("Content-type", "application/sparql-query")
@@ -1147,16 +1079,11 @@ mod tests {
         #[actix_rt::test]
         async fn post_query_form() {
             let path = tempdir().unwrap();
-            let app_state = web::Data::new(
-                AppState {
-                    store: SledStore::open(path.path()).unwrap()
-                }
-            );
-            let mut app = test::init_service(
-                App::new()
-                    .configure(
-                        config_app(app_state.clone()))
-            ).await;
+            let app_state = web::Data::new(AppState {
+                store: SledStore::open(path.path()).unwrap(),
+            });
+            let mut app =
+                test::init_service(App::new().configure(config_app(app_state.clone()))).await;
             let req = test::TestRequest::post()
                 .uri("http://localhost/query")
                 .header("Content-Type", "application/x-www-form-urlencoded")
@@ -1173,16 +1100,11 @@ mod tests {
         #[actix_rt::test]
         async fn post_update() {
             let path = tempdir().unwrap();
-            let app_state = web::Data::new(
-                AppState {
-                    store: SledStore::open(path.path()).unwrap()
-                }
-            );
-            let mut app = test::init_service(
-                App::new()
-                    .configure(
-                        config_app(app_state.clone()))
-            ).await;
+            let app_state = web::Data::new(AppState {
+                store: SledStore::open(path.path()).unwrap(),
+            });
+            let mut app =
+                test::init_service(App::new().configure(config_app(app_state.clone()))).await;
             let req = test::TestRequest::post()
                 .uri("http://localhost/update")
                 .header("Content-Type", "application/sparql-update")
@@ -1191,21 +1113,16 @@ mod tests {
             .to_request();
             let resp = test::call_service(&mut app, req).await;
             assert_eq!(resp.status(), http::StatusCode::NO_CONTENT);
-    }
+        }
 
         #[actix_rt::test]
         async fn post_bad_update() {
             let path = tempdir().unwrap();
-            let app_state = web::Data::new(
-                AppState {
-                    store: SledStore::open(path.path()).unwrap()
-                }
-            );
-            let mut app = test::init_service(
-                App::new()
-                    .configure(
-                        config_app(app_state.clone()))
-            ).await;
+            let app_state = web::Data::new(AppState {
+                store: SledStore::open(path.path()).unwrap(),
+            });
+            let mut app =
+                test::init_service(App::new().configure(config_app(app_state.clone()))).await;
             let req = test::TestRequest::post()
                 .uri("http://localhost/update")
                 .header("Content-Type", "application/sparql-update")
@@ -1221,16 +1138,10 @@ mod tests {
         // Tests from https://www.w3.org/2009/sparql/docs/tests/data-sparql11/http-rdf-update/
 
         let path = tempdir().unwrap();
-        let app_state = web::Data::new(
-            AppState {
-                store: SledStore::open(path.path()).unwrap()
-            }
-        );
-        let mut app = test::init_service(
-            App::new()
-                .configure(
-                    config_app(app_state.clone()))
-        ).await;
+        let app_state = web::Data::new(AppState {
+            store: SledStore::open(path.path()).unwrap(),
+        });
+        let mut app = test::init_service(App::new().configure(config_app(app_state.clone()))).await;
 
         // PUT - Initial state
         println!("PUT - Initial state");
@@ -1238,7 +1149,7 @@ mod tests {
             .uri("http://localhost/store/person/1.ttl")
             .header("Content-Type", "text/turtle; charset=utf-8")
             .set_payload(
-            "
+                "
 @prefix foaf: <http://xmlns.com/foaf/0.1/> .
 @prefix v: <http://www.w3.org/2006/vcard/ns#> .
 
@@ -1247,7 +1158,8 @@ mod tests {
         a v:VCard;
         v:fn \"John Doe\"
     ].
-")
+",
+            )
             .to_request();
         let resp = test::call_service(&mut app, req).await;
         assert_eq!(resp.status(), http::StatusCode::CREATED);
@@ -1276,7 +1188,7 @@ mod tests {
             .uri("http://localhost/store/person/1.ttl")
             .header("Content-Type", "text/turtle; charset=utf-8")
             .set_payload(
-            "
+                "
 @prefix foaf: <http://xmlns.com/foaf/0.1/> .
 @prefix v: <http://www.w3.org/2006/vcard/ns#> .
 
@@ -1285,7 +1197,8 @@ mod tests {
         a v:VCard;
         v:fn \"Jane Doe\"
     ].
-")
+",
+            )
             .to_request();
         let resp = test::call_service(&mut app, req).await;
         assert_eq!(resp.status(), http::StatusCode::NO_CONTENT);
@@ -1305,7 +1218,7 @@ mod tests {
             .uri("http://localhost/store?default")
             .header("Content-Type", "text/turtle; charset=utf-8")
             .set_payload(
-            "
+                "
 @prefix foaf: <http://xmlns.com/foaf/0.1/> .
 @prefix v: <http://www.w3.org/2006/vcard/ns#> .
 
@@ -1314,7 +1227,8 @@ mod tests {
         a v:VCard;
         v:given-name \"Alice\"
     ] .
-")
+",
+            )
             .to_request();
         let resp = test::call_service(&mut app, req).await;
         assert_eq!(resp.status(), http::StatusCode::NO_CONTENT); // The default graph always exists in Oxigraph
@@ -1362,7 +1276,7 @@ mod tests {
             .uri("http://localhost/store/person/2.ttl")
             .header("Content-Type", "text/turtle; charset=utf-8")
             .set_payload(
-            "
+                "
 @prefix foaf: <http://xmlns.com/foaf/0.1/> .
 @prefix v: <http://www.w3.org/2006/vcard/ns#> .
 
@@ -1371,7 +1285,8 @@ mod tests {
         a v:VCard;
         v:given-name \"Alice\"
     ] .
-")
+",
+            )
             .to_request();
         let resp = test::call_service(&mut app, req).await;
         assert_eq!(resp.status(), http::StatusCode::NO_CONTENT);
@@ -1422,7 +1337,7 @@ mod tests {
             .uri("http://localhost/store")
             .header("Content-Type", "text/turtle; charset=utf-8")
             .set_payload(
-            "
+                "
 @prefix foaf: <http://xmlns.com/foaf/0.1/> .
 @prefix v: <http://www.w3.org/2006/vcard/ns#> .
 
@@ -1431,7 +1346,8 @@ mod tests {
         a v:VCard;
         v:given-name \"Alice\"
     ] .
-")
+",
+            )
             .to_request();
         let resp = test::call_service(&mut app, req).await;
         assert_eq!(resp.status(), http::StatusCode::CREATED);
@@ -1460,7 +1376,5 @@ mod tests {
             .to_request();
         let resp = test::call_service(&mut app, req).await;
         assert_eq!(resp.status(), http::StatusCode::OK);
-
-
     }
 }

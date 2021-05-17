@@ -1,20 +1,20 @@
 use anyhow::Error;
+use oxigraph::io::DatasetFormat;
 use std::path;
-use oxigraph::io::{DatasetFormat};
 
 mod cli;
 
 fn main() {
     match run_cli() {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(err) => eprintln!("Error: {}", err),
     }
 }
 
 fn run_cli() -> Result<(), Error> {
     use oxigraph::SledStore;
-    use std::io;
     use std::fs;
+    use std::io;
 
     let matches = cli::build_cli().get_matches();
 
@@ -26,14 +26,8 @@ fn run_cli() -> Result<(), Error> {
     if let Some(matches) = matches.subcommand_matches("load") {
         let data = path::Path::new(matches.value_of("data").unwrap());
         if let Some(format) = dataset_format_from_path(data) {
-            store
-                .load_dataset(
-                    io::BufReader::new(fs::File::open(data)?),
-                    format,
-                    None
-            )?;
+            store.load_dataset(io::BufReader::new(fs::File::open(data)?), format, None)?;
         }
-
     }
     Ok(())
 }
@@ -62,10 +56,7 @@ mod tests {
 
         #[test]
         fn no_extension() {
-            assert_eq!(
-                dataset_format_from_path(path::Path::new("test/test")),
-                None
-            );
+            assert_eq!(dataset_format_from_path(path::Path::new("test/test")), None);
         }
 
         #[test]
